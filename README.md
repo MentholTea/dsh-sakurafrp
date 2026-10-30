@@ -42,12 +42,24 @@ Web 设备 → xxx.nyat.app:端口 → SakuraFrp 节点 → frpc(本插件托管
 ## 安装
 
 ```powershell
-# 1) 把本目录放到你想要的位置，例如 D:\plugins\dsh-natfrp
-# 2) desktop profile 的 package.json dependencies 加：
-"@local/dsh-natfrp": "link:D:/plugins/dsh-natfrp"
-# 3) dsh.profile.bundles 列表加 "@local/dsh-natfrp"
-# 4) 运行 dsh plugin --profile desktop install，然后重启 DSH
+# 一条命令（desktop profile）
+dsh plugin --profile desktop add dsh-natfrp -w
+
+# web / CLI 场景把 --profile 换成你的 profile 名，例如：
+# dsh plugin --profile web add dsh-natfrp -w
+
+# 然后重启 DSH
 ```
+
+**装完还要做两件事**（frpc 二进制不会被 npm 包携带）：
+
+1. 下载 SakuraFrp 官方 frpc 放到 `~/.dsh/bin/frpc-standalone.exe`
+   （`~/.dsh/bin/frpc-standalone` 为非 Windows 平台），`frpc -V` 输出应含 `sakura`
+2. 重启 DSH → 设置页填访问密钥 → 下拉选隧道 → 设公网密码
+
+> 想走源码：`git clone https://github.com/MentholTea/dsh-natfrp.git` 后把
+> `dependencies` 写成 `"dsh-natfrp": "link:<克隆目录绝对路径>"`，并加入
+> `dsh.profile.bundles`，再 `dsh plugin --profile desktop install`。
 
 frpc 可执行文件默认取 `~/.dsh/bin/frpc-standalone(.exe)`（Sakura 官方分发版，
 `-V` 输出应含 `sakura`）。

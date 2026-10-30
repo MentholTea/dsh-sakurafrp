@@ -1,4 +1,4 @@
-// @local/dsh-natfrp — 宿主半侧。
+// dsh-natfrp — 宿主半侧。
 //
 // 数据流：
 //   公网 → frpc(-f 语义, env 鉴权) → 127.0.0.1:<gatePort>(本插件网关)

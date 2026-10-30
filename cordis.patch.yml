@@ -1,11 +1,11 @@
-# @local/dsh-natfrp 挂载声明。
+# dsh-natfrp 挂载声明。
 # id 必须与其它插件行全局不冲突；name 解析到包入口 index.js。
 # config 键见 README：所有键都可用，state.json 里的用户设置优先于这里的默认值。
 # 注意：config 里出现的路径只是示例。装好后首次启动前，请按 README 填写
 # 你自己的 frpc 路径、访问密钥文件与隧道 ID（或全部留空，用设置页配置）。
 - insert:
     - id: natfrp
-      name: '@local/dsh-natfrp'
+      name: 'dsh-natfrp'
       inject:
         - credentials
         - webServer

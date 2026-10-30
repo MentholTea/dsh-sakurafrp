@@ -1,9 +1,9 @@
 {
-  "name": "@local/dsh-natfrp",
+  "name": "dsh-natfrp",
   "version": "2.0.0",
-  "private": true,
+  "description": "DeepSeek Harness 内建的内网穿透面板：托管 SakuraFrp frpc、一键对齐端口、流量统计与公网密码门。",
   "type": "module",
-  "description": "DeepSeek Harness 内建的内网穿透面板：托管 SakuraFrp frpc，隧道列表 / 端口一键对齐 / 流量统计 / 公网密码门。",
+  "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -17,10 +17,39 @@
     "gate.mjs",
     "client.js",
     "verify.mjs",
+    "scroll-test.mjs",
+    "switch-test.mjs",
+    "traffic-test.mjs",
+    "external-test.mjs",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg"
   ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "sakurafrp",
+    "natfrp",
+    "frp",
+    "tunnel",
+    "reverse-proxy",
+    "内网穿透"
+  ],
+  "license": "MIT",
+  "author": "MentholTea",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MentholTea/dsh-natfrp.git"
+  },
+  "homepage": "https://github.com/MentholTea/dsh-natfrp#readme",
+  "bugs": {
+    "url": "https://github.com/MentholTea/dsh-natfrp/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
   },

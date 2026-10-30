@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/dsh-natfrp',
+  id: 'dsh-natfrp',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -666,7 +666,7 @@ window.__ModuleLoader__.load({
     // 因此状态点分两处呈现：
     //   · 展开模式：图标不画点，由 CSS 注入的 ::after 画在「文字右侧」（占半个字高）
     //   · 折叠模式：没有文字，把点画在 SVG 内部右上角
-    const SIDEBAR_CSS_ID = '@local/dsh-natfrp/sidebar-dot.css'
+    const SIDEBAR_CSS_ID = 'dsh-natfrp/sidebar-dot.css'
 
     function ensureSidebarCss() {
       if (typeof document === 'undefined') return
@@ -746,7 +746,7 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
 }
 `.trim()
       const tag = document.createElement('style')
-      tag.dataset.plugin = '@local/dsh-natfrp'
+      tag.dataset.plugin = 'dsh-natfrp'
       tag.dataset.pluginCss = SIDEBAR_CSS_ID
       tag.textContent = css
       document.head.appendChild(tag)
