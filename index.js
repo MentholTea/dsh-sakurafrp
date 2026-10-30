@@ -10,7 +10,7 @@
 // 先 POST /tunnel/edit 改成 gatePort，再拉起 frpc —— 根治「隧道成功但 502」。
 
 import { createServer } from 'node:http'
-import { readFileSync, mkdirSync, writeFileSync, existsSync, renameSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync, existsSync, rmdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -29,17 +29,39 @@ const PASSWORD_FILE = join(DATA_DIR, 'gate-password.txt')
 
 /**
  * 一次性迁移旧状态目录（包名从 dsh-natfrp 改为 dsh-sakurafrp 时）。
- * 只在「新目录不存在、旧目录存在」时整目录 rename，避免用户丢网关密码与隧道选择。
- * 任何失败都静默放过：迁移不了就当首次使用，绝不能让插件起不来。
+ *
+ * ⚠️ 用「复制」而不是 rename：
+ *   旧包（@local/dsh-natfrp）可能仍被安装着，rename 会把它的状态目录搬走，
+ *   让它下一轮读不到 state.json / 网关密码 —— 迁移不该有这种破坏性副作用。
+ *   复制出来的副本让新包直接可用，旧目录留给旧包自己，用户卸载旧包时可自行清理。
+ *
+ * 只在「新目录不存在、旧目录存在」时动作；任何失败都静默放过（退化为首次使用），
+ * 绝不能让插件起不来。
  */
+const LEGACY_FILES = ['state.json', 'gate-password.txt']
+
 function migrateLegacyDataDir() {
   try {
     if (existsSync(DATA_DIR)) return
     if (!existsSync(LEGACY_DATA_DIR)) return
-    mkdirSync(DSH_HOME, { recursive: true })
-    renameSync(LEGACY_DATA_DIR, DATA_DIR)
+    let copied = 0
+    mkdirSync(DATA_DIR, { recursive: true })
+    for (const file of LEGACY_FILES) {
+      const from = join(LEGACY_DATA_DIR, file)
+      if (!existsSync(from)) continue
+      try {
+        writeFileSync(join(DATA_DIR, file), readFileSync(from), { mode: 0o600 })
+        copied += 1
+      } catch {
+        // 单个文件失败不影响其它文件
+      }
+    }
+    if (copied === 0) {
+      // 没复制到任何东西就别留空目录，避免下次误判「已迁移」
+      try { rmdirSync(DATA_DIR) } catch { /* noop */ }
+    }
   } catch {
-    // 跨设备/权限不足等 —— 退化为重新配置一次
+    // 权限/IO 问题 —— 退化为重新配置一次
   }
 }
 migrateLegacyDataDir()
