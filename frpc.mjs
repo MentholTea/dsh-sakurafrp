@@ -130,7 +130,10 @@ export function createFrpcManager({
     disconnectTimes = []
 
     const myGen = generation
-    const spawned = nodeSpawn(frpcPath, ['--disable_log_color', '-n', ...extraArgs], {
+    // ⚠️ 这里不能放 `-n`：它是个需要取值的 flag，extraArgs 为空时就悬在参数末位，
+    //    frpc 会以 "flag needs an argument: -n" 立刻退出 —— 表现是启动即闪退、
+    //    然后无限退避重启。鉴权走 NATFRP_TOKEN 环境变量，不需要任何 flag。
+    const spawned = nodeSpawn(frpcPath, ['--disable_log_color', ...extraArgs], {
       cwd,
       env: {
         ...process.env,
@@ -143,13 +146,24 @@ export function createFrpcManager({
     handle = spawned
     lastParams = { tunnelIds, cwd, extraArgs }
 
-    const feed = (d) => {
-      const text = String(d)
-      pushLine(text)
-      parseLine(text)
+    // 行缓冲：管道 data 事件的切分点是任意的，一行日志可能被拆成两块，
+    // 直接拿 data 块去匹配会让「隧道启动成功」「使用 >> xxx <<」这类关键行漏掉，
+    // 表现为隧道明明起来了、侧边栏状态点还是黄。stdout/stderr 各自独立缓冲，避免交错串行。
+    const bufs = { out: '', err: '' }
+    const makeFeed = (key) => (d) => {
+      const text = bufs[key] + String(d)
+      const parts = text.split(/\r?\n/)
+      bufs[key] = parts.pop() ?? ''
+      // 防御：子进程长时间不输出换行时，别让残留缓冲无限增长
+      if (bufs[key].length > 64 * 1024) bufs[key] = ''
+      for (const line of parts) {
+        if (!line.trim()) continue
+        pushLine(line)
+        parseLine(line)
+      }
     }
-    spawned.stdout?.on('data', feed)
-    spawned.stderr?.on('data', feed)
+    spawned.stdout?.on('data', makeFeed('out'))
+    spawned.stderr?.on('data', makeFeed('err'))
 
     spawned.on('error', (e) => {
       pushLine(`spawn error: ${e?.message ?? e}`)

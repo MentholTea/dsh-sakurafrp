@@ -44,10 +44,13 @@ if (mainPanel) {
   rec('顶部避让 titlebar', /--dsh-frame-top-clearance/.test(mainPanel))
 }
 
-// ── 日志区不应有嵌套滚动 ──
+// ── 日志区：默认展开就必须限高，同时保留「新窗口」兜底 ──
+// 早先的结论是「日志不限高、滚动交给外层」，前提是日志默认收起；
+// 现在日志默认展开且每 2s 刷新，不限高会被几千行日志撑成一条长条，
+// 所以改为「限高 + 内部滚动 + 新窗口看全量」。
 const logsBlock = src.slice(src.indexOf('// ── 日志 ──'), src.indexOf('// ── 侧边栏图标'))
-rec('日志不再 maxHeight 裁切', !/maxHeight:\s*'260px'/.test(logsBlock), logsBlock ? '' : '未找到日志段')
-rec('日志改 overflow:visible', /overflow:\s*'visible'/.test(logsBlock))
+rec('日志不再用旧的 260px 裁切', !/maxHeight:\s*'260px'/.test(logsBlock), logsBlock ? '' : '未找到日志段')
+rec('日志限高且允许内部滚动', /maxHeight: '220px', overflowY: 'auto'/.test(logsBlock))
 rec('日志提供新窗口打开（长日志兜底）', /在新窗口打开/.test(logsBlock))
 
 const ok = results.every(Boolean)

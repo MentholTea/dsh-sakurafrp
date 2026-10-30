@@ -43,7 +43,16 @@ function parseCookies(header) {
   for (const part of String(header ?? '').split(';')) {
     const i = part.indexOf('=')
     if (i < 0) continue
-    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim())
+    const name = part.slice(0, i).trim()
+    const raw = part.slice(i + 1).trim()
+    if (!name) continue
+    // cookie 值可能被畸形百分号编码污染（中间件/手改/攻击者构造），
+    // decodeURIComponent 遇到 "%zz" 会直接抛 URIError —— 不能让一个 cookie 打挂整个请求
+    try {
+      out[name] = decodeURIComponent(raw)
+    } catch {
+      out[name] = raw
+    }
   }
   return out
 }
@@ -96,6 +105,35 @@ button:active{opacity:.85}
 }
 
 /**
+ * 「还没设置访问密码」的提示页。
+ *
+ * 为什么不直接放行：公网流量是 frpc 转进来的，remoteAddress 永远是 127.0.0.1，
+ * 服务端根本无法区分「本机浏览器」和「公网访客」。只要对无密码请求放行，
+ * 就等于把整个 DSH 无认证暴露到公网。所以宁可明确拒绝，也不能默认直通。
+ */
+function noPasswordPageHtml() {
+  return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>需要先设置访问密码</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:#0f1117;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.card{background:#171a23;border:1px solid #262b38;border-radius:14px;padding:30px 26px;
+  max-width:380px;width:calc(100% - 48px);text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+h1{font-size:16px;margin:0 0 10px;font-weight:600;color:#e7eaf2}
+p{font-size:13px;color:#9aa2b6;line-height:1.75;margin:0}
+code{background:#10131b;border:1px solid #2c3345;border-radius:5px;padding:1px 6px;
+  font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#c9d1e6}
+</style></head><body>
+<div class="card">
+  <h1>尚未设置访问密码</h1>
+  <p>为防止 DSH 被无认证暴露到公网，密码未设置时网关会拒绝所有外部请求。<br>
+  请在<b>本机</b> DSH 的「设置 → 插件 → 内网穿透」里设置一个访问密码后重试。</p>
+</div></body></html>`
+}
+
+/**
  * 密码门。返回 {handle(req,res)}：true = 已接管。
  * cookie 为 HMAC(密码, 进程随机钥)——改密码或进程重启即失效。
  */
@@ -104,6 +142,8 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
   const MAX_AGE = 60 * 60 * 24 * 30
   const sessionKey = randomBytes(16).toString('hex')
   const failures = new Map()
+  /** 失败计数表上限：公网流量都来自 127.0.0.1 时只有一条，但被其它入口复用时可能膨胀。 */
+  const MAX_TRACKED_IPS = 512
 
   const cookieFor = (pw) => createHmac('sha256', sessionKey).update(String(pw)).digest('hex')
 
@@ -113,7 +153,25 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
     return { locked: false, retryAfter: 0 }
   }
 
+  /**
+   * 清理失败计数表，防止长期运行后无限增长（每个新 IP 一条，永不过期）。
+   * 先删「已解锁且无累计」的过期记录；仍超额就按插入顺序丢最旧的。
+   */
+  function pruneFailures() {
+    if (failures.size <= MAX_TRACKED_IPS) return
+    const now = Date.now()
+    for (const [ip, rec] of failures) {
+      if (failures.size <= MAX_TRACKED_IPS) break
+      if (rec.until <= now && rec.count === 0) failures.delete(ip)
+    }
+    for (const ip of failures.keys()) {
+      if (failures.size <= MAX_TRACKED_IPS) break
+      failures.delete(ip)
+    }
+  }
+
   function recordFailure(ip) {
+    pruneFailures()
     const rec = failures.get(ip) ?? { count: 0, until: 0 }
     rec.count += 1
     if (rec.count >= maxFailures) {
@@ -144,7 +202,19 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
 
   async function handle(req, res) {
     const password = String(getPassword?.() ?? '')
-    if (!password) return false // 未配置密码：由调用方决定放行或拒绝
+    if (!password) {
+      // ⚠️ 未配置密码时必须「拒绝」而不是「放行」：
+      //    公网流量经 frpc 进来，remoteAddress 恒为 127.0.0.1，
+      //    一旦放行就等于把 DSH 无认证摊到公网（旧版就是这个行为）。
+      if (String(req.headers.accept ?? '').includes('text/html')) {
+        res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(noPasswordPageHtml())
+      } else {
+        res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end('{"error":"gate-password-not-set"}')
+      }
+      return true
+    }
 
     const ip = clientIp(req)
     const lock = lockState(ip)
@@ -215,10 +285,10 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
     return true
   }
 
-  /** WS 升级请求的验权（只看 cookie；未配置密码时放行）。 */
+  /** WS 升级请求的验权（只看 cookie；未配置密码时一律拒绝，理由同上）。 */
   function checkWs(req) {
     const password = String(getPassword?.() ?? '')
-    if (!password) return true
+    if (!password) return false
     const cookies = parseCookies(req.headers.cookie)
     return Boolean(cookies[COOKIE]) && safeEqual(cookies[COOKIE], cookieFor(password))
   }
@@ -234,14 +304,23 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
  */
 export function createGateServer({
   port,
-  host = '0.0.0.0',
+  host = '127.0.0.1',
   upstream,
   launchToken = () => '',
   onRequest = null,
   injectHtml = POLYFILL_HTML,
   log = () => {},
 }) {
-  const authority = `${upstream.host}:${upstream.port}`
+  /**
+   * 上游端口可以传函数：DSH 的 webServer.port 在 listen 之前是 undefined，
+   * 启动时求值会被固化成 0，之后所有转发都打到 0 端口（表现为整站 502）。
+   * 每次请求现取，才能在 DSH 后启动的情况下自动恢复。
+   */
+  const upstreamPort = () => {
+    const p = typeof upstream.port === 'function' ? upstream.port() : upstream.port
+    return Number(p) || 0
+  }
+  const authority = () => `${upstream.host}:${upstreamPort()}`
 
   function withLaunchToken(reqUrl, cookieHeader) {
     const token = String(launchToken?.() ?? '')
@@ -263,14 +342,15 @@ export function createGateServer({
       if (HOP_BY_HOP.has(k.toLowerCase())) continue
       out[k] = v
     }
-    out.host = authority
-    if (raw.origin) out.origin = `http://${authority}`
+    const auth = authority()
+    out.host = auth
+    if (raw.origin) out.origin = `http://${auth}`
     if (raw.referer) {
       try {
         const u = new URL(raw.referer)
-        out.referer = `http://${authority}${u.pathname}${u.search}`
+        out.referer = `http://${auth}${u.pathname}${u.search}`
       } catch {
-        out.referer = `http://${authority}/`
+        out.referer = `http://${auth}/`
       }
     }
     if (raw['sec-fetch-site']) out['sec-fetch-site'] = 'same-origin'
@@ -297,6 +377,13 @@ export function createGateServer({
   })
 
   function forward(req, res) {
+    const targetPort = upstreamPort()
+    if (!targetPort) {
+      // 端口还没解析出来：明确 503，别去连 0 端口换一个含糊的 ECONNREFUSED
+      res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+      res.end('DSH WebServer 尚未就绪，请稍后重试')
+      return
+    }
     const wantInject = Boolean(injectHtml) && req.method === 'GET' && isHtmlNav(req)
     const headers = rewriteHeaders(req.headers, req.method, wantInject)
     const path = wantInject
@@ -304,7 +391,7 @@ export function createGateServer({
       : req.url
 
     const proxyReq = httpRequest(
-      { host: upstream.host, port: upstream.port, method: req.method, path, headers },
+      { host: upstream.host, port: targetPort, method: req.method, path, headers },
       (proxyRes) => {
         const status = proxyRes.statusCode ?? 502
         const resHeaders = { ...proxyRes.headers }
@@ -389,8 +476,17 @@ export function createGateServer({
     headers.connection = 'Upgrade'
     headers.upgrade = req.headers.upgrade ?? 'websocket'
 
+    const targetPort = upstreamPort()
+    if (!targetPort) {
+      try {
+        socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n')
+        socket.destroy()
+      } catch { /* noop */ }
+      return
+    }
+
     const proxyReq = httpRequest({
-      host: upstream.host, port: upstream.port, method: 'GET', path: req.url, headers,
+      host: upstream.host, port: targetPort, method: 'GET', path: req.url, headers,
     })
     proxyReq.on('upgrade', (proxyRes, proxySocket, proxyHead) => {
       socket.write(

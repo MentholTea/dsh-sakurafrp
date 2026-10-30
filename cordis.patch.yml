@@ -12,11 +12,15 @@
         - timer
         - connection
       config:
-        enabled: true
-        # frpcPath: ''    # 留空 = 默认 ~/.dsh/bin/frpc-standalone(.exe)
+        # ⚠️ 不要在这里写 enabled / gatePort / tunnelId 的默认值：
+        #    这个文件是「装上即生效」的初始配置，写了等于替用户做了选择。
+        #    装上必须是关的、端口必须是空的、隧道必须由用户自己选。
+        # enabled: true   # ← 千万不要打开：等于新装就把 DSH 挂到公网
+        # frpcPath: ''    # 留空 = 默认 ~/.dsh/dsh-sakurafrp/frpc-standalone(.exe)
         # tokenFile: ''   # 留空 = 走 DSH credentials 的 tokenRef
         tokenRef: 'NATFRP_TOKEN'
         # tunnelId: ''    # 留空 = 首启后在设置页选择
-        gatePort: 3083
+        # gatePort: 3083  # 留空 = 首次在设置页填；预填会让用户跳过端口检查
+        # gateHost: '127.0.0.1'  # 网关监听地址；frpc 同机时无需对外监听，勿改 0.0.0.0
         autoAlign: true
         maxLogLines: 500

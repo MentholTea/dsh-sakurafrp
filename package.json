@@ -1,9 +1,9 @@
 {
   "name": "dsh-sakurafrp",
   "version": "2.0.0",
-  "description": "DeepSeek Harness 内建的内网穿透面板：托管 SakuraFrp frpc、一键对齐端口、流量统计与公网密码门。",
   "type": "module",
   "main": "index.js",
+  "description": "DeepSeek Harness 内建的内网穿透面板：托管 SakuraFrp frpc，隧道列表 / 端口自动同步 / 流量统计 / 公网密码门。",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -15,16 +15,38 @@
     "natfrp.mjs",
     "frpc.mjs",
     "gate.mjs",
+    "installer.mjs",
+    "paths.mjs",
     "client.js",
-    "verify.mjs",
-    "scroll-test.mjs",
-    "switch-test.mjs",
-    "traffic-test.mjs",
-    "external-test.mjs",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg"
   ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MentholTea/dsh-sakurafrp.git"
+  },
+  "homepage": "https://github.com/MentholTea/dsh-sakurafrp#readme",
+  "bugs": {
+    "url": "https://github.com/MentholTea/dsh-sakurafrp/issues"
+  },
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -39,33 +61,8 @@
   ],
   "license": "MIT",
   "author": "MentholTea",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/MentholTea/dsh-sakurafrp.git"
-  },
-  "homepage": "https://github.com/MentholTea/dsh-sakurafrp#readme",
-  "bugs": {
-    "url": "https://github.com/MentholTea/dsh-sakurafrp/issues"
-  },
-  "engines": {
-    "node": ">=22"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1"
-  },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    },
-    "client": {
-      "platform": "web",
-      "immediately": true,
-      "inject": [
-        "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-client-ui-layout",
-        "@deepseek-ai/dsh-client-locale"
-      ]
-    }
+  "scripts": {
+    "test": "node test-all.mjs",
+    "preview": "node preview-render.mjs"
   }
 }

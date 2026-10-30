@@ -25,7 +25,18 @@ rec('拒绝非绝对地址（不再静默失败）', /无法打开非绝对地�
 rec('优先宿主内置浏览器标签', /right\.openTab\('browser'/.test(body || ''))
 rec('退化 window.open', /window\.open\(target, '_blank'/.test(body || ''))
 rec('全部外链已改造', !/target: '_blank'/.test(src))
-rec('ExternalLink 5 处', (src.match(/h\(ExternalLink/g) || []).length === 5)
+// 6 处：① 获取密钥 / 域名提示的「绑定证书」与「绑定教程」/ 一键安装的下载说明（两处）/
+//       隧道公网地址。原来标题栏的「子域绑定」和句中的「绑定子域名」都已撤掉
+//       （前者纯多余，后者只是句子里的一串字，不需要可点）。
+rec('ExternalLink 6 处', (src.match(/h\(ExternalLink/g) || []).length === 6)
+// 「绑定证书」链到子域绑定页 —— 用户读到这句就想「那我去绑」，点它就是那一步。
+// 但「不」必须留在链接外：连成一片蓝色会读成「不去绑定证书」，意思正好反了。
+rec('「绑定证书」链到 natfrp.com/tunnel/domain',
+  /href: 'https:\/\/www\.natfrp\.com\/tunnel\/domain'[\s\S]{0,200}?'绑定证书 ↗'/.test(src))
+rec('「不」在链接之外（纯文本）',
+  /'不',\s*\n\s*h\(ExternalLink, \{[\s\S]{0,200}?'绑定证书 ↗'/.test(src))
+rec('证书提示不再有「你的子域名:远程端口」',
+  !/'你的子域名:远程端口'/.test(src))
 rec('日志按钮优先用服务端 logsUrl', /st\.logsUrl \|\| logsUrl\(\)/.test(src))
 
 // ── 2) 服务端提供绝对 logsUrl ──

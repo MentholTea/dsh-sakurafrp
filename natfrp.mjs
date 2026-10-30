@@ -6,7 +6,7 @@
 //   写端点：全部 POST，application/x-www-form-urlencoded 或 JSON 均可（规范锚点复用）
 
 const BASE = 'https://api.natfrp.com/v4'
-const UA = 'dsh-sakurafrp/2.0 (DeepSeek Harness plugin)'
+const UA = 'dsh-natfrp/2.0 (DeepSeek Harness plugin)'
 
 export class ApiError extends Error {
   constructor(code, msg, status) {

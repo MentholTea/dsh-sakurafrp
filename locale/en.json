@@ -1,11 +1,11 @@
 {
   "natfrp": {
     "title": "Tunnel (SakuraFrp)",
-    "desc": "Managed SakuraFrp frpc: tunnel picker, auto port alignment, traffic stats, public password gate.",
+    "desc": "Managed SakuraFrp frpc: tunnel picker, automatic port sync, traffic stats, public password gate.",
     "errNoToken": "Access token not configured",
     "errNoTunnel": "Tunnel ID not configured",
     "kickSuspect": "Possible session conflict",
     "tunnelUp": "Tunnel online",
-    "aligned": "Aligned"
+    "aligned": "Ports match"
   }
 }
