@@ -1,5 +1,5 @@
 {
-  "name": "dsh-natfrp",
+  "name": "dsh-sakurafrp",
   "version": "2.0.0",
   "description": "DeepSeek Harness 内建的内网穿透面板：托管 SakuraFrp frpc、一键对齐端口、流量统计与公网密码门。",
   "type": "module",
@@ -41,11 +41,11 @@
   "author": "MentholTea",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MentholTea/dsh-natfrp.git"
+    "url": "git+https://github.com/MentholTea/dsh-sakurafrp.git"
   },
-  "homepage": "https://github.com/MentholTea/dsh-natfrp#readme",
+  "homepage": "https://github.com/MentholTea/dsh-sakurafrp#readme",
   "bugs": {
-    "url": "https://github.com/MentholTea/dsh-natfrp/issues"
+    "url": "https://github.com/MentholTea/dsh-sakurafrp/issues"
   },
   "engines": {
     "node": ">=22"
