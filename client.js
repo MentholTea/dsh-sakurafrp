@@ -1,4 +1,7 @@
 window.__ModuleLoader__.load({
+  // ⚠️ 必须与 package.json 的 name 完全一致：DSH 的浏览器端模块身份 = 解析出的包名，
+  //    写成别的值（如旧的 @local/dsh-natfrp）会让宿主在 boot 时抛
+  //    `loaded without registering "<包名>"`，插件 UI 整半侧加载失败。
   id: 'dsh-sakurafrp',
   factory(require) {
     const React = require('react')
@@ -112,11 +115,16 @@ window.__ModuleLoader__.load({
       if (!r.ok) throw new Error(body.message || body.error || `HTTP ${r.status}`)
       return body
     }
-    async function post(path) {
-      const r = await fetch(`${API}${path}`, { method: 'POST', credentials: 'same-origin' })
-      const body = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(body.message || body.error || `HTTP ${r.status}`)
-      return body
+    async function post(path, body) {
+      const init = { method: 'POST', credentials: 'same-origin' }
+      if (body !== undefined) {
+        init.headers = { 'content-type': 'application/json' }
+        init.body = JSON.stringify(body)
+      }
+      const r = await fetch(`${API}${path}`, init)
+      const payload = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(payload.message || payload.error || `HTTP ${r.status}`)
+      return payload
     }
     async function postConfig(patch) {
       const r = await fetch(`${API}/config`, {
@@ -125,7 +133,14 @@ window.__ModuleLoader__.load({
         body: JSON.stringify(patch),
       })
       const body = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(body.message || body.error || `HTTP ${r.status}`)
+      if (!r.ok) {
+        // 把 hint 附在错误上，让界面能显示「怎么解决」而不只是「失败了」
+        const err = new Error(body.message || body.error || `HTTP ${r.status}`)
+        err.hint = body.hint
+        err.code = body.code
+        err.path = body.path
+        throw err
+      }
       return body
     }
 
@@ -139,21 +154,31 @@ window.__ModuleLoader__.load({
     }
 
     const S = {
-      wrap: { padding: '16px 0', display: 'flex', flexDirection: 'column', gap: '18px' },
-      row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' },
+      // 密度：整页靠 wrap 的 gap 统一控制间距，子元素上别再撒 margin-top，
+      // 否则「省一点」和「补回来」会互相打架。目标是一屏看到全部配置项。
+      wrap: { padding: '2px 0', display: 'flex', flexDirection: 'column', gap: '9px' },
+      row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' },
       label: { fontSize: '13px', fontWeight: 600 },
-      hint: { fontSize: '12px', opacity: 0.65, marginTop: '2px', lineHeight: 1.6 },
+      hint: { fontSize: '12px', opacity: 0.6, marginTop: '1px', lineHeight: 1.45 },
+      // 表单行：左边标题固定列宽，右边控件。
+      // 原来每个字段都是「标题 / 说明 / 输入框」三层，现在是「标题 | 输入框」一行，
+      // 三个字段省下约三行高度。
+      field: {
+        display: 'grid', gridTemplateColumns: '138px minmax(0, 1fr)',
+        alignItems: 'center', gap: '10px',
+      },
+      flabel: { fontSize: '12px', fontWeight: 600, lineHeight: 1.35 },
       input: {
-        width: '100%', boxSizing: 'border-box', padding: '7px 10px', fontSize: '13px',
+        width: '100%', boxSizing: 'border-box', padding: '5px 9px', fontSize: '13px',
         borderRadius: '6px', border: '1px solid var(--dsw-alias-border-1, #d0d5dd)',
         background: 'var(--dsw-alias-bg-1, #fff)', color: 'inherit',
       },
       btn: {
-        padding: '6px 14px', fontSize: '13px', borderRadius: '6px', cursor: 'pointer',
+        padding: '5px 13px', fontSize: '13px', borderRadius: '6px', cursor: 'pointer',
         border: '1px solid transparent', background: '#4f6ef7', color: '#fff',
       },
       btnGhost: {
-        padding: '6px 14px', fontSize: '13px', borderRadius: '6px', cursor: 'pointer',
+        padding: '5px 13px', fontSize: '13px', borderRadius: '6px', cursor: 'pointer',
         background: 'transparent', color: 'inherit', border: '1px solid var(--dsw-alias-border-1, #d0d5dd)',
       },
       sw: (on) => ({
@@ -176,7 +201,7 @@ window.__ModuleLoader__.load({
         background: 'rgba(217,119,6,.12)', color: '#d97706',
       },
       warn: { fontSize: '12px', color: '#d97706', lineHeight: 1.7 },
-      err: { fontSize: '12px', color: '#dc2626' },
+      err: { fontSize: '12px', color: '#dc2626', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
       ok: { fontSize: '12px', color: '#16a34a' },
       divider: { height: '1px', background: 'var(--dsw-alias-border-1, #e5e7eb)' },
       code: {
@@ -203,6 +228,29 @@ window.__ModuleLoader__.load({
       }),
     }
 
+    /**
+     * 节点「忙不忙」的判定与配色。
+     *
+     * 负载来自官方 /node/stats 的 load（百分比），节点列表里直接标在名字后面，
+     * 用户挑节点时不用去官网查。阈值按「还能不能愉快地建隧道」定：
+     *   <40 空闲（绿） 40–70 一般（黄） 70–90 拥挤（橙） >=90 满载（红）
+     *
+     * ⚠️ load = -1 表示没拿到数据，必须显示「未知」（灰），不能当成空闲——
+     *    否则一个查不到负载的节点会伪装成最空闲的那个。
+     * createAllowed=false 时官方已经不允许在这个节点新建，直接用「满载」，
+     * 与 load 数值无关。
+     */
+    function nodeStatus(n) {
+      if (n?.createAllowed === false) return { text: '满载', color: '#dc2626' }
+      const load = Number(n?.load)
+      if (!Number.isFinite(load) || load < 0) return { text: '未知', color: '#6b7280' }
+      const pct = Math.round(load)
+      if (load < 40) return { text: `空闲 ${pct}%`, color: '#16a34a' }
+      if (load < 70) return { text: `一般 ${pct}%`, color: '#d97706' }
+      if (load < 90) return { text: `拥挤 ${pct}%`, color: '#ea580c' }
+      return { text: `满载 ${pct}%`, color: '#dc2626' }
+    }
+
     function Toggle({ on, onChange, disabled }) {
       return h('button', {
         type: 'button', style: { ...S.sw(on), opacity: disabled ? 0.5 : 1 },
@@ -218,20 +266,47 @@ window.__ModuleLoader__.load({
     //   red    错误（互踢、密钥缺失、网关未监听、API 失败、路由不可达）
     const DIAG = { green: '#22c55e', yellow: '#eab308', red: '#ef4444' }
 
+    /**
+     * 侧边栏状态点判定。
+     *
+     * 语义（用户定义）：
+     *   红 = 关闭状态（enabled=false）或 未安装 frpc / frpc 异常
+     *   黄 = 已开启但尚未连通（启动中、隧道未就绪）
+     *   绿 = 连接成功（frpc 运行 + 隧道已上线）
+     *
+     * ⚠️ 与旧实现的区别：以前「关闭」是黄，「故障」才红。
+     *    现在关闭本身就算红（用户明确要求：关闭=红），
+     *    因为「你想用它却没开/没装」才是需要被看见的状态。
+     */
     function diagOf(st) {
-      if (!st) return 'yellow'
+      if (!st) return 'red' // 拿不到状态 = 异常，按红处理
+
       const f = st.frpc || {}
-      if (f.kickSuspect) return 'red'
-      if (st.apiError) return 'red'
+      const inst = st.frpcInstall || {}
+
+      // ① 未安装 / frpc 不可用 → 红
+      if (inst.present === false) return 'red'
+      if (inst.present === true && inst.ok === false) return 'red'
+
+      // ② 关闭状态 → 红
+      if (st.enabled === false) return 'red'
+
+      // ③ 其它硬故障 → 红
       if (!st.tokenConfigured) return 'red'
       if (!st.gateRunning) return 'red'
-      if (st.enabled && !f.running) return 'red'
-      if (st.enabled && f.running && f.tunnelOk) return 'green'
-      return 'yellow'
+      if (f.kickSuspect) return 'red'
+      if (st.apiError) return 'red'
+      if (!f.running) return 'red' // 开着却没跑起来 = 故障
+
+      // ④ 运行中但隧道还没上线 → 黄（启动过程）
+      if (f.running && f.tunnelOk !== true) return 'yellow'
+
+      // ⑤ 全部就绪
+      return 'green'
     }
 
     const diagStore = (() => {
-      let value = 'yellow'
+      let value = 'red'  // 初始=未就绪，按红显示，避免误报为黄
       let enabled = true     // 开关状态（独立于连通诊断）
       let timer = null
       const listeners = new Set()
@@ -316,31 +391,349 @@ window.__ModuleLoader__.load({
       }
     })()
 
+    /**
+     * frpc 安装卡片。
+     * 只在「未安装 / 装的不对 / 正在安装 / 刚装完要看结果」时出现；装好且提示过期后整卡消失。
+     *
+     * 安装走后端 POST /frpc/install（异步），进度靠 /state 里 frpcInstall 轮询：
+     *   · progress  —— 进行中的阶段与字节数
+     *   · lastResult —— 上一次的成败（后端留存，否则装完界面静默恢复，用户毫无反馈）
+     */
+    function FrpcInstallCard({ inst, onDone }) {
+      const [busy, setBusy] = useState(false)
+      const [err, setErr] = useState('')
+      // 记录已被用户看过/已过期的结果时间戳，避免提示一直挂着
+      const [dismissedAt, setDismissedAt] = useState(0)
+
+      const presence = inst ?? {}
+      const progress = presence.progress ?? null
+      const installing = Boolean(progress)
+      const present = Boolean(presence.present)
+      const healthy = present && presence.ok !== false
+      // 可写性：null=未检测，false=目标目录只读
+      const writable = presence.writable
+      const notWritable = writable === false
+      const shownPath = presence.displayPath || presence.path || '~/.dsh/bin/frpc-standalone'
+
+      const last = presence.lastResult ?? null
+      // acknowledged 来自服务端（落盘的），跨会话有效：
+      // 用户关掉过这条结果，就不该下次打开设置时又弹一遍。
+      const ackedPersisted = last?.acknowledged === true
+      const showResult = Boolean(last) && !ackedPersisted && last.at !== dismissedAt
+      // 用户已叉掉「这一类问题」：整卡收起，只在下方留一行淡淡的「恢复提示」入口
+      const dismissedByUser = presence.dismissed === true
+
+      /**
+       * 关掉结果提示。
+       * ⚠️ 必须落盘（POST /frpc/ack-result），只写本地 state 是不够的：
+       *    组件随设置面板卸载重建，本地 state 归零 → 卡片立刻复活，
+       *    这条一次性消息就变成永远关不掉。
+       * 之后只有「frpc 再次出问题并重新装好」产生新的 at，才会再提示一次。
+       */
+      const ackResult = (at) => {
+        setDismissedAt(at) // 先本地收起，点击即时反馈
+        return post('/frpc/ack-result', { at }).then(() => onDone?.()).catch(() => {})
+      }
+
+      // 结果展示 8 秒（失败 20 秒）后自动收起，并一并落盘：
+      // 展示过就算看过了，否则用户不点叉的话每次进设置都会再弹一次。
+      // 失败结果即使被 ack 也不会丢信息 —— healthy 为 false 时会继续显示安装引导卡。
+      useEffect(() => {
+        if (!showResult) return undefined
+        const at = last.at
+        const t = setTimeout(
+          () => { void ackResult(at) },
+          last.ok ? 8000 : 20000,
+        )
+        return () => clearTimeout(t)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [showResult, last?.at, last?.ok])
+
+      // 已装好 且 没有待展示的结果 → 不占地方
+      if (healthy && !showResult) return null
+
+      // 用户叉掉过同类问题，且当前没有新的安装结果要看 → 收起成一行小字
+      if (dismissedByUser && !showResult) {
+        return h('div', {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '11px',
+            opacity: 0.55,
+            padding: '2px 0',
+          },
+        },
+          h('span', {}, 'frpc 提示已隐藏'),
+          h('button', {
+            type: 'button',
+            style: {
+              background: 'none', border: 'none', padding: 0,
+              color: '#4f6ef7', cursor: 'pointer', fontSize: '11px',
+            },
+            onClick: () => {
+              void post('/frpc/undismiss').then(() => onDone?.()).catch(() => {})
+            },
+          }, '恢复提示'))
+      }
+
+      // 装好了：显示成功卡片（自动消失）
+      if (healthy) {
+        return h('div', {
+          style: {
+            padding: '12px 14px',
+            borderRadius: '10px',
+            border: '1px solid rgba(34,197,94,.45)',
+            background: 'rgba(34,197,94,.10)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+          },
+        },
+          h('span', { style: { fontSize: '16px' } }, '✅'),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', flex: '1 1 auto' } },
+            h('span', { style: { fontWeight: 600, fontSize: '13px' } }, 'frpc 安装成功'),
+            h('span', { style: { ...S.hint, fontSize: '11px' } },
+              [last?.version, last?.bytes ? `${(last.bytes / 1048576).toFixed(1)}MB` : null]
+                .filter(Boolean).join(' · ') || '已完成'),
+            h('span', { style: { ...S.hint, fontSize: '11px' } }, shownPath)),
+          h('button', {
+            type: 'button',
+            title: '关闭',
+            'aria-label': '关闭',
+            style: {
+              flex: 'none', width: '22px', height: '22px', lineHeight: '20px',
+              textAlign: 'center', padding: 0, border: 'none', borderRadius: '6px',
+              background: 'transparent', color: 'inherit', opacity: 0.55,
+              cursor: 'pointer', fontSize: '15px',
+            },
+            onClick: () => { void ackResult(last?.at ?? Date.now()) },
+          }, '✕'))
+      }
+
+      const startInstall = async () => {
+        setBusy(true); setErr('')
+        try {
+          await post('/frpc/install')
+          // 立刻拉一次，让进度条马上出现（不用等下一轮轮询）
+          onDone?.()
+        } catch (e) {
+          setErr(String(e.message || e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const pct = progress && progress.total
+        ? Math.min(100, Math.round((progress.received / progress.total) * 100))
+        : null
+      // 字节数进度（total 缺失时也有反馈）
+      const mbText = progress && progress.received
+        ? `${(progress.received / 1048576).toFixed(1)}${progress.total ? ` / ${(progress.total / 1048576).toFixed(1)}` : ''} MB`
+        : ''
+
+      return h('div', {
+        style: {
+          padding: '14px',
+          borderRadius: '10px',
+          border: '1px solid rgba(234,179,8,.45)',
+          background: 'rgba(234,179,8,.08)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+        },
+      },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+          h('span', { style: { fontSize: '15px' } }, '⚙️'),
+          h('span', { style: { fontWeight: 600, fontSize: '13px', flex: '1 1 auto' } },
+            present ? 'frpc 不可用' : '未检测到 frpc'),
+          // 叉号：关闭后不再显示，直到问题类型或路径变化（或点「恢复提示」）
+          h('button', {
+            type: 'button',
+            title: '关闭提示（问题解决或变化前不再显示）',
+            'aria-label': '关闭提示',
+            style: {
+              flex: 'none',
+              width: '22px',
+              height: '22px',
+              lineHeight: '20px',
+              textAlign: 'center',
+              padding: 0,
+              border: 'none',
+              borderRadius: '6px',
+              background: 'transparent',
+              color: 'inherit',
+              opacity: 0.55,
+              cursor: 'pointer',
+              fontSize: '15px',
+            },
+            onMouseEnter: (e) => { e.currentTarget.style.opacity = '1' },
+            onMouseLeave: (e) => { e.currentTarget.style.opacity = '0.55' },
+            onClick: () => {
+              // 先把本地视觉收起（即时反馈），再落盘
+              void post('/frpc/dismiss').then(() => onDone?.()).catch(() => {})
+            },
+          }, '✕')),
+
+        h('div', { style: S.hint },
+          present
+            ? `本地文件存在但不正确：${presence.error || '版本不符'}`
+            : '内网穿透需要 SakuraFrp 官方 frpc。点下面的按钮自动下载并安装到本机，无需手动操作。'),
+
+        h('div', { style: { ...S.hint, fontSize: '11px', opacity: 0.75, wordBreak: 'break-all' } },
+          `安装位置：${shownPath}`,
+          presence.pathSource === 'config'
+            ? '（来自配置 frpcPath）'
+            : presence.homeSource === 'DSH_HOME'
+              ? '（跟随 $DSH_HOME）'
+              : presence.homeSource === 'DSH_PROFILE_DIR'
+                ? '（由 $DSH_PROFILE_DIR 推断）'
+                : ''),
+
+        // 上一次安装失败：明确告诉用户为什么，而不是静默恢复原样
+        showResult && last && !last.ok
+          ? h('div', {
+            style: {
+              padding: '10px 12px',
+              borderRadius: '8px',
+              border: '1px solid rgba(239,68,68,.45)',
+              background: 'rgba(239,68,68,.10)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px',
+            },
+          },
+            h('span', { style: { fontWeight: 600, fontSize: '12px', color: '#dc2626' } }, '❌ 上次安装失败'),
+            h('span', { style: { ...S.hint, fontSize: '11px', wordBreak: 'break-word' } }, last.error || '未知错误'),
+            h('span', { style: { ...S.hint, fontSize: '11px', opacity: 0.7 } }, '可重试，或用下方「手动下载说明」。'))
+          : null,
+
+        // 只读目录：不提供一键安装，直接给手动方案 + 改配置的提示
+        notWritable
+          ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
+            h('div', { style: S.warn },
+              '⚠ 该目录不可写（常见于系统级安装）。无法自动安装，请任选其一：'),
+            h('div', { style: { ...S.hint, fontSize: '12px' } },
+              h('div', {}, '① 手动下载 frpc 后放到上面这个路径（需要管理员权限）'),
+              h('div', {}, '② 或在 cordis.patch.yml 里把 ',
+                h('span', { style: S.code }, 'frpcPath'),
+                ' 指到一个可写目录，重启后重新点安装')),
+            h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+              h(ExternalLink, {
+                href: 'https://doc.natfrp.com/frpc/usage.html',
+                style: { fontSize: '12px' },
+              }, '手动下载说明 ↗'),
+              h('button', {
+                type: 'button', style: S.btnGhost, onClick: onDone,
+              }, '重新检测')))
+          : installing
+            ? h('div', {},
+              h('div', {
+                style: {
+                  ...S.hint,
+                  marginBottom: '6px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                },
+              },
+                h('span', {},
+                  progress.phase === 'checking'
+                    ? '正在查询官方下载地址…'
+                    : pct === null
+                      ? `正在下载…${mbText ? ` ${mbText}` : ''}`
+                      : `正在下载… ${pct}%`),
+                mbText ? h('span', { style: { opacity: 0.7 } }, mbText) : null),
+              h('div', { style: S.trafficBar },
+                h('div', {
+                  style: {
+                    height: '100%',
+                    width: pct === null ? '15%' : `${Math.max(3, pct)}%`,
+                    borderRadius: '4px',
+                    background: '#3b82f6',
+                    transition: 'width .25s ease',
+                  },
+                })),
+              h('div', { style: { ...S.hint, fontSize: '11px', marginTop: '6px', opacity: 0.7 } },
+                '下载约 14MB，请保持页面开启；完成后会自动启动隧道。'))
+            : h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+              h('button', {
+                type: 'button',
+                style: busy ? { ...S.btn, opacity: 0.6 } : S.btn,
+                disabled: busy,
+                onClick: startInstall,
+              }, busy ? '提交中…' : '一键安装 frpc'),
+              h(ExternalLink, {
+                href: 'https://doc.natfrp.com/frpc/usage.html',
+                style: { fontSize: '12px' },
+              }, '手动下载说明 ↗')),
+
+        err ? h('div', { style: S.err }, err) : null)
+    }
+
+    /**
+     * 仅给布局预览用的开关（preview-render.mjs 设置 window.__natfrpPreviewCreate）。
+     * 生产环境这个属性不存在，恒为 false —— 不改变任何真实行为，
+     * 只是让「新建表单展开」这一屏也能被渲染出来检查排版。
+     */
+    const PREVIEW_CREATE = typeof window !== 'undefined' && window.__natfrpPreviewCreate === true
+
     function Panel() {
       const [st, setSt] = useState(null)
       const [user, setUser] = useState(null)
       const [tunnels, setTunnels] = useState(null)
+      // 两类错误分开存：
+      //   err     = 用户操作（保存 / 改隧道端口 / 开关）产生的，必须留到下一次操作才清
+      //   pollErr = 轮询 /state 失败的提示，下一轮成功即可消失
+      // 混用一个 state 时，4 秒一次的轮询成功会把刚弹出的报错立刻清空。
       const [err, setErr] = useState('')
+      const [pollErr, setPollErr] = useState('')
       const [busy, setBusy] = useState(false)
       const [saved, setSaved] = useState('')
       const [alignMsg, setAlignMsg] = useState('')
       const [gatePort, setGatePort] = useState('')
       const [gatePassword, setGatePassword] = useState('')
       const [token, setToken] = useState('')
-      const [logsOpen, setLogsOpen] = useState(false)
+      // 日志默认展开：很多问题（连不上、端口被抢）只有日志里有答案，
+      // 藏起来等于让用户先猜一次。展开状态由下面 2s 一次的轮询保持最新。
+      const [logsOpen, setLogsOpen] = useState(true)
       const [logs, setLogs] = useState('')
+      // 「新建隧道」表单：默认收起，展开时才去拉节点列表（省一次 API 调用）
+      const [newOpen, setNewOpen] = useState(PREVIEW_CREATE)
+      // 名字留空 = 由服务端兜底成 DSH；不预填是为了让「我没填」和「填了 DSH」可区分
+      const [newName, setNewName] = useState('')
+      const [newNode, setNewNode] = useState('')
+      /** 新建表单里的端口：默认跟当前本机端口一致，改了就以它为准 */
+      const [newPort, setNewPort] = useState('')
+      const [nodes, setNodes] = useState(null)
+      const [nodeErr, setNodeErr] = useState('')
+      const [createErr, setCreateErr] = useState('')
+      /** 端口可用性检测的结论（填完就查，不用等保存） */
+      const [portMsg, setPortMsg] = useState('')
+      const [portOk, setPortOk] = useState(false)
+      /** 新建表单里那个端口的检测结论，单独一份，避免两处互相冲掉 */
+      const [newPortMsg, setNewPortMsg] = useState('')
+      const [newPortOk, setNewPortOk] = useState(false)
+      /** 「本机端口 ↔ 隧道端口」同步结果的一句话说明 */
+      const [syncMsg, setSyncMsg] = useState('')
+      // 用户一旦动过端口输入框，轮询就不能再覆盖它的值（否则打字打到一半被打回）
+      const portDirty = useRef(false)
       const mounted = useRef(true)
+      /** 日志容器：内容刷新后自动滚到最新一行 */
+      const logRef = useRef(null)
+      /** 是否还「钉」在底部 —— 用户往上翻看旧日志时解除，滚回底部自动恢复 */
+      const logPinned = useRef(true)
 
       const loadState = useCallback(async () => {
         try {
           const s = await getJSON('/state')
           if (!mounted.current) return
           setSt(s)
-          setGatePort(String(s.gatePort ?? ''))
-          setErr('')
+          if (!portDirty.current) setGatePort(String(s.gatePort ?? ''))
+          setPollErr('')
           diagStore.kick() // 面板拿到最新状态后立刻同步侧边栏状态点
         } catch (e) {
-          if (mounted.current) setErr(String(e.message || e))
+          if (mounted.current) setPollErr(String(e.message || e))
         }
       }, [])
 
@@ -350,6 +743,14 @@ window.__ModuleLoader__.load({
         const t = setInterval(() => void loadState(), 4000)
         return () => { mounted.current = false; clearInterval(t) }
       }, [loadState])
+
+      // 安装进行中：把轮询提到 400ms，否则 4s 一次的话进度条几乎看不出在动
+      const installingNow = Boolean(st?.frpcInstall?.progress)
+      useEffect(() => {
+        if (!installingNow) return undefined
+        const fast = setInterval(() => void loadState(), 400)
+        return () => clearInterval(fast)
+      }, [installingNow, loadState])
 
       const loadExtra = useCallback(async () => {
         try {
@@ -369,33 +770,142 @@ window.__ModuleLoader__.load({
         setTimeout(() => { if (mounted.current) setter('') }, ms)
       }
 
+      /**
+       * 把服务端回来的端口同步报告翻成一句人话。
+       *
+       * direction 决定谁跟着谁走，两种方向的措辞必须区分开，
+       * 否则用户看到「已改成 3083」完全不知道改的是哪一边：
+       *   to-panel = 改了本机端口，面板里那条隧道跟着改
+       *   to-local = 选了隧道，本机端口跟着隧道改
+       */
+      const describeSync = (r) => {
+        if (!r) return ''
+        if (r.error) return `⚠ 端口没同步：${r.error}`
+        if (r.changed && r.direction === 'to-local') {
+          return `✓ 已把本机端口改成 ${r.to}（跟随这条隧道，原来是 ${r.from}）`
+        }
+        if (r.changed && r.direction === 'to-panel') {
+          return `✓ 已把隧道里的端口改成 ${r.to}（本机 ${r.from} 被别的程序占着，只能用这个）`
+        }
+        if (r.already) return `✓ 隧道端口和本机端口一致（${r.port}）`
+        if (r.skipped) return ''
+        return ''
+      }
+
+      /** 新建表单里的端口也要当场给结论，别等点了「创建隧道」才报错。 */
+      const checkNewPort = async () => {
+        const n = Number(newPort)
+        if (!Number.isInteger(n) || n < 1) { setNewPortMsg(''); setNewPortOk(false); return }
+        if (n < 1024 || n > 65535) {
+          setNewPortOk(false)
+          setNewPortMsg('⚠ 要用 1024–65535 之间的端口')
+          return
+        }
+        try {
+          const r = await getJSON(`/port/check?port=${n}`)
+          if (!mounted.current) return
+          const ok = Boolean(r.available)
+          setNewPortOk(ok)
+          setNewPortMsg(ok ? `✓ ${n} 可以用` : `⚠ ${n} 已被占用`)
+        } catch (e) {
+          if (mounted.current) setNewPortMsg(`检测失败：${e.message || e}`)
+        }
+      }
+
+      /** 填完端口就查一次能不能用，别等保存时才报错。 */
+      const checkPort = async (v) => {
+        const n = Number(v)
+        if (!Number.isInteger(n) || n < 1) { setPortMsg(''); setPortOk(false); return }
+        if (n < 1024 || n > 65535) {
+          setPortOk(false)
+          setPortMsg('⚠ 要用 1024–65535 之间的端口')
+          return
+        }
+        try {
+          const r = await getJSON(`/port/check?port=${n}`)
+          if (!mounted.current) return
+          const ok = Boolean(r.available)
+          setPortOk(ok)
+          setPortMsg(ok
+            ? `✓ 端口 ${n} 可以用`
+            : `⚠ 端口 ${n} 已被其它程序占用，换一个（比如 ${n + 1}）`)
+        } catch (e) {
+          if (mounted.current) setPortMsg(`端口检测失败：${e.message || e}`)
+        }
+      }
+
+      /** @returns {Promise<boolean>} true = 已保存到服务端 */
       const apply = async (patch) => {
         setBusy(true); setErr('')
         try {
           const s = await postConfig(patch)
-          if (!mounted.current) return
+          if (!mounted.current) return false
           setSt(s)
+          // 服务端已确认保存 → 输入框与权威值对齐，解除「用户正在编辑」锁定
+          portDirty.current = false
           setGatePort(String(s.gatePort ?? ''))
+          // 端口可能被服务端顺手同步到隧道（或反过来），把结论说出来
+          setSyncMsg(describeSync(s.portSync))
+          // 换了端口就等于换了个数，旧的可用性结论不能留着
+          if (patch.gatePort !== undefined) { setPortMsg(''); setPortOk(false) }
           flash(setSaved, '已保存')
+          return true
         } catch (e) {
-          if (mounted.current) setErr(String(e.message || e))
+          // 显示 message + hint：权限类错误光说"失败"没有用，用户要知道怎么改
+          if (mounted.current) {
+            const msg = String(e.message || e)
+            setErr(e.hint ? `${msg}\n\n${e.hint}` : msg)
+          }
+          return false
         } finally {
           if (mounted.current) setBusy(false)
         }
       }
 
+      /**
+       * 保存：把界面上所有填过的值一次性提交。
+       *
+       * 入口有两个（①「访问密钥」右侧的主按钮、底部的 GHOST 按钮），
+       * 走同一份逻辑 —— 否则两处迟早出现「这个能存、那个不能存」的偏差。
+       * 只提交真正填了东西的键：空着 = 保持不变，不能把已有配置清掉。
+       */
+      const saveAll = () => {
+        const patch = {}
+        if (gatePort) patch.gatePort = Number(gatePort)
+        if (gatePassword.trim()) patch.gatePassword = gatePassword.trim()
+        if (token.trim()) patch.token = token.trim()
+        // 只有真正保存成功才清空输入：失败还清空的话用户得重新敲一遍
+        apply(patch).then((ok) => {
+          if (!ok) return
+          setToken('')
+          setGatePassword('')
+          // 密钥/端口变了 → 隧道列表和端口校验都得重拉，
+          // 不然下面还停在「列表加载中」或者旧的端口警告上
+          void loadExtra()
+        })
+      }
+
+      /**
+       *
+       * ⚠️ 界面上一律不出现「对齐」二字：这是内部说法，用户看不懂「对齐什么」。
+       *    对外只说清事实——「隧道连 3082，插件在 3083，所以外网打不开」。
+       */
       const doAlign = async () => {
         setBusy(true); setAlignMsg('')
         try {
           const r = await post('/align')
           if (!mounted.current) return
-          const msg = r.already ? '已对齐（无需修改）'
-            : r.changed ? `已把面板端口 ${r.from} → ${r.to}`
-            : r.error ? `失败：${r.error}`
-            : r.reason ? `跳过：${r.reason}` : '完成'
+          const msg = r.already ? '隧道端口本来就是对的，不用改'
+            : r.changed ? `已把隧道端口从 ${r.from} 改成 ${r.to}`
+              : r.error ? `没改成：${r.error}`
+                : r.reason ? `没改成：${r.reason}`
+                  : r.skipped ? '没有可改的（先在上面选一个隧道）' : '完成'
           setAlignMsg(msg)
+          // 改完必须重拉隧道列表：不重拉的话界面还停在旧端口上，
+          // 「端口不一致」的警告和按钮会一直挂着，看起来像没生效。
+          void loadExtra()
         } catch (e) {
-          if (mounted.current) setAlignMsg(`失败：${e.message}`)
+          if (mounted.current) setAlignMsg(`没改成：${e.message}`)
         } finally {
           if (mounted.current) setBusy(false)
         }
@@ -417,18 +927,162 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const loadLogs = async () => {
-        const open = !logsOpen
-        setLogsOpen(open)
-        if (open) {
+      /**
+       * 重启 frpc（停 → 起）。
+       * 互踢警告里原本写着「点击『重启』」，但界面上根本没有这个按钮，
+       * 用户只能靠关掉再打开开关绕过去。这里补上真实入口。
+       */
+      const doRestart = async () => {
+        setBusy(true); setErr('')
+        try {
+          await post('/stop')
+          const s = await post('/start')
+          if (mounted.current) setSt(s)
+          diagStore.setEnabled(true)
+          diagStore.kick()
+        } catch (e) {
+          if (mounted.current) setErr(String(e.message || e))
+        } finally {
+          if (mounted.current) setBusy(false)
+        }
+      }
+
+      /** 拉一次日志。失败静默 —— 日志是辅助信息，不该盖住主界面的报错。 */
+      const pullLogs = async () => {
+        try {
           const r = await fetch(`${API}/logs`, { credentials: 'same-origin' })
-          setLogs(await r.text())
+          if (!r.ok) return
+          const t = await r.text()
+          if (mounted.current) setLogs(t)
+        } catch { /* 拉不到就维持上一份 */ }
+      }
+
+      /**
+       * 日志展开时每 2s 拉一次。
+       * 原来只在点「展开」时拉一次，之后 frpc 再写什么都不会更新，
+       * 用户得收起再展开才看得到 —— 看起来像日志不刷新。
+       * 收起时立刻停掉，不在后台白耗请求。
+       */
+      useEffect(() => {
+        if (!logsOpen) return undefined
+        void pullLogs()
+        const t = setInterval(() => void pullLogs(), 2000)
+        return () => clearInterval(t)
+      }, [logsOpen])
+
+      /**
+       * 有新日志就滚到底 —— 不然每 2s 刷新一次，看到的永远是上面那几十行旧的，
+       * 还以为日志「不更新」。用户自己往上翻时（logPinned=false）不抢滚动条。
+       */
+      useEffect(() => {
+        const el = logRef.current
+        if (el && logPinned.current) el.scrollTop = el.scrollHeight
+      }, [logs])
+
+      /**
+       * 展开「新建隧道」表单。
+       *
+       * 节点列表懒加载：只有真要点新建时才拉一次，不跟 4s 轮询一起跑。
+       * 隧道类型固定为 TCP，所以这里只需要让用户挑节点 + 起个名字。
+       */
+      const openCreate = async () => {
+        setNewOpen(true); setCreateErr(''); setNodeErr('')
+        // 端口默认沿用当前本机端口：多数人不会想换，填一次就能同时建隧道 + 定端口
+        setNewPort(String(st?.gatePort ?? ''))
+        if (nodes) return
+        try {
+          const r = await getJSON('/nodes')
+          if (!mounted.current) return
+          const list = r.nodes ?? []
+          setNodes(list)
+          // 只有一个可选节点就直接选中，省一次点击
+          if (list.length === 1) setNewNode(String(list[0].id))
+        } catch (e) {
+          if (!mounted.current) return
+          const msg = String(e.message || e)
+          setNodeErr(msg === 'no-token'
+            ? '先在上面保存访问密钥，才能新建隧道'
+            : `拿不到节点列表：${msg}`)
+        }
+      }
+
+      /**
+       * 展开表单时才拉节点列表（省一次 API 调用）。
+       *
+       * 放在 effect 里而不是按钮回调里：触发条件是「表单展开了」这个状态本身，
+       * 按钮、恢复上次状态、外部预置都会走同一条路，不会漏。
+       */
+      useEffect(() => {
+        if (!newOpen || nodes) return
+        void openCreate()
+      }, [newOpen, nodes])
+
+      /**
+       * 端口定了就自动验一次可用性。
+       *
+       * 为什么要自动：第 ④ 步（访问密码）的显示条件是「端口已确认可用」，
+       * 如果只在用户 blur 输入框时才检测，那么重开面板 / 选完隧道之后
+       * portOk 一直是 false，④ 就永远不出现 —— 用户会觉得密码框丢了。
+       * 只在端口值真的变了才重测，避免 4s 轮询反复打检测接口。
+       */
+      const autoChecked = useRef('')
+      useEffect(() => {
+        if (!st?.tokenConfigured || !st?.tunnelId) return
+        const p = String(st.gatePort ?? '')
+        if (!p) { setPortOk(false); return }
+        if (autoChecked.current === p) return
+        autoChecked.current = p
+        void checkPort(p)
+      }, [st?.gatePort, st?.tunnelId, st?.tokenConfigured])
+
+      /**
+       * 真正建隧道。
+       * 本地 IP 由服务端固定成 127.0.0.1；端口用表单里填的那个（同时会写进本机端口），
+       * 远程端口由官方自动分配 —— 所以前端只需要名字 + 节点 + 端口。
+       */
+      const doCreate = async () => {
+        if (!newNode) { setCreateErr('先选一个节点'); return }
+        if (!String(newPort).trim()) { setCreateErr('再填一个端口，比如 3083'); return }
+        const p = Number(newPort)
+        if (!Number.isInteger(p) || p < 1024 || p > 65535) {
+          setCreateErr('端口要填 1024–65535 之间的整数')
+          return
+        }
+        setBusy(true); setCreateErr('')
+        try {
+          const r = await post('/tunnel/create', {
+            name: (newName.trim() || 'DSH').slice(0, 24),
+            node: Number(newNode),
+            port: p,
+            // 自动 HTTPS 固定走「自动」：这是官方面板新建时的默认值，也是唯一
+            // 不会坑到用户的选择（选禁用，http(s) 隧道就拿不到证书）。
+            // 不放进界面 —— 新建 TCP 隧道时它根本不起作用，摆出来只会多一个要判断的选项。
+            autoHttps: 'auto',
+          })
+          if (!mounted.current) return
+          setNewOpen(false)
+          setSyncMsg(`✓ 隧道用的端口是 ${r.port ?? p}，本机端口也已同步成这个数`)
+          if (r.autoHttpsDropped) {
+            setAlignMsg('⚠ 官方没接受「自动 HTTPS」这一项，隧道已按默认设置建好；需要的话去管理面板里补。')
+          } else if (r.warning) {
+            // 官方一次性警告（节点规则/配额等）常驻显示，别用 flash 让它自己消失
+            setAlignMsg(`⚠ ${r.warning}`)
+          } else {
+            flash(setAlignMsg, `已新建隧道「${r.name}」，并设为当前隧道`, 6000)
+          }
+          // 新隧道已在服务端设成当前隧道 → 列表和状态都要重拉
+          await Promise.all([loadExtra(), loadState()])
+        } catch (e) {
+          if (mounted.current) setCreateErr(String(e.message || e))
+        } finally {
+          if (mounted.current) setBusy(false)
         }
       }
 
       if (!st) {
-        return h('div', { style: S.wrap }, err
-          ? h('div', { style: S.err }, `读取状态失败：${err}`)
+        const firstErr = err || pollErr
+        return h('div', { style: S.wrap }, firstErr
+          ? h('div', { style: S.err }, `读取状态失败：${firstErr}`)
           : h('div', { style: S.hint }, '加载中…'))
       }
 
@@ -452,43 +1106,120 @@ window.__ModuleLoader__.load({
 
       const frpc = st.frpc ?? {}
 
+      // 隧道端口 vs 本机端口：只有「列表已加载 + 选中了隧道」时才有结论，
+      // 否则保持未知（不提示、不出按钮），免得凭空吓人。
+      const pickedTunnel = tunnels && tunnels.length
+        ? tunnels.find((x) => String(x.id) === String(st.tunnelId))
+        : null
+      // local_port 万一缺失（NaN）也不能当成「不一致」，否则会误报并显示改端口按钮
+      const tunnelPort = pickedTunnel && Number.isFinite(Number(pickedTunnel.local_port))
+        ? Number(pickedTunnel.local_port)
+        : null
+      // 本机端口可能是 null（新装还没填）——不能 Number(null)=0 参与比较，
+      // 否则会被当成「端口 0」和隧道比对，凭空报出「不一致」。
+      const gatePortNum = Number.isInteger(Number(st.gatePort)) && Number(st.gatePort) > 0
+        ? Number(st.gatePort)
+        : null
+      const portMismatch = tunnelPort !== null && gatePortNum !== null && tunnelPort !== gatePortNum
+
+      /**
+       * 四步是「渐进解锁」的，不是四个常驻字段：
+       *   第一步 密钥 —— 永远显示（没有它什么都做不了）
+       *   第二步 隧道 —— 有密钥才显示（列表要凭密钥才拉得到）
+       *   第三步 端口 —— 选了隧道才显示（端口就是往这条隧道里送）
+       *   第四步 密码 —— 端口确认可用才显示（到这一步才真的能用了）
+       * 四个全摊在一屏里，新人面对的就是一堆还不该他管的字段。
+       */
+      const showTunnel = Boolean(st.tokenConfigured)
+      const showPort = showTunnel && Boolean(st.tunnelId)
+      // 「可用」= 检测通过，或插件自己的网关已经在监听这个端口（等价于可用）
+      const portReady = portOk || Boolean(gatePortNum && st.gateRunning)
+      const showPassword = showPort && portReady
+
+      /** 一句到位的下一步提示：只说要做的这一件，别复述整张表单。 */
+      const nextHint = !showTunnel
+        ? '把管理面板里的访问密钥粘贴进来，点右边保存。'
+        : !showPort
+          ? '选一条隧道，或者点「新建」现建一条。'
+          : !showPassword
+            ? '填个本机端口，确认可用后才会出现最后一步。'
+            : ''
+
       return h('div', { style: S.wrap },
-        // ── 总开关 ──
+        // ── frpc 缺失时的安装引导（置顶，最显眼）──
+        h(FrpcInstallCard, { inst: st.frpcInstall, onDone: () => void loadState() }),
+
+        // ── 总开关 + 运行状态（原来三行标题，现在并成一行）──
         h('div', { style: S.row },
-          h('div', {},
+          h('div', {
+            style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flexWrap: 'wrap' },
+            // 原来挂在标题下的那句说明，收进悬停提示：信息还在，但不占一行
+            title: '关闭后立即断开公网连接，DSH 重启也不再连；本机端口与密码设置都会保留。',
+          },
             h('div', { style: S.label }, '内网穿透'),
-            h('div', { style: S.hint }, '关闭后 frpc 立即停止，DSH 重启也不再启动。网关与密码门不受影响。')),
+            h('span', { style: S.badge(frpc.running) },
+              frpc.running ? `frpc 运行中${frpc.pid ? ` ${frpc.pid}` : ''}` : 'frpc 已停止'),
+            h('span', { style: S.badge(st.gateRunning) },
+              gatePortNum
+                ? `:${gatePortNum} ${st.gateRunning ? '已就绪' : '未就绪'}`
+                : '端口未设置')),
           h(Toggle, { on: st.enabled, disabled: busy, onChange: doToggle })),
 
-        // ── 运行状态 ──
-        h('div', { style: S.row },
-          h('div', { style: S.label }, 'frpc 状态'),
-          h('span', { style: S.badge(frpc.running) },
-            frpc.running ? `运行中${frpc.pid ? ` (PID ${frpc.pid})` : ''}` : '已停止')),
+        // 开了开关却没端口：frpc 起不来，必须说清原因，否则用户只看到「已停止」
+        st.enabled && !gatePortNum
+          ? h('div', { style: S.warn },
+            '⚠ 开关已开，但端口空着 —— frpc 不会启动。在 ③ 填一个端口。')
+          : null,
 
         frpc.kickSuspect
-          ? h('div', { style: S.warn },
-            '⚠ 疑似互踢：同一隧道被其它客户端（SakuraFrp 启动器或别的机器）连接。' +
-            '请关闭其它客户端后点击「重启」。')
+          ? h('div', {
+            style: {
+              ...S.warn,
+              display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
+            },
+          },
+            h('span', { style: { flex: '1 1 240px' } },
+              '⚠ 连接被抢了：这条隧道正被其它客户端（SakuraFrp 启动器或另一台机器）占着，' +
+              '两边会轮流掉线。先关掉那边，再点「重启」。'),
+            h('button', {
+              type: 'button',
+              style: busy ? { ...S.btnGhost, opacity: 0.6 } : S.btnGhost,
+              disabled: busy,
+              onClick: doRestart,
+            }, busy ? '重启中…' : '重启'))
           : null,
 
-        frpc.tunnelUrl
-          ? h('div', { style: S.row },
-            h('div', { style: S.label }, '公网地址'),
-            h(ExternalLink, {
-              href: frpc.tunnelUrl.includes('://') ? frpc.tunnelUrl : `https://${frpc.tunnelUrl}`,
-              style: { fontSize: '13px' },
-            }, frpc.tunnelUrl))
+        // ── 公网地址 / 账号 / 流量：三行压成两行 ──
+        //   第一行：公网地址 …… 今日已用 · 剩余（靠右）
+        //   第二行：账号名 | 流量条 | 百分比
+        frpc.tunnelUrl || user
+          ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
+            frpc.tunnelUrl
+              ? h('span', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 } },
+                h('span', { style: { ...S.hint, marginTop: 0 } }, '公网地址'),
+                h(ExternalLink, {
+                  href: frpc.tunnelUrl.includes('://') ? frpc.tunnelUrl : `https://${frpc.tunnelUrl}`,
+                  style: { fontSize: '12px' },
+                }, frpc.tunnelUrl))
+              : null,
+            user
+              ? h('span', { style: { ...S.hint, marginTop: 0, marginLeft: 'auto' } },
+                `今日已用 ${fmtBytes(todayUsed)} · 剩余 ${fmtBytes(remaining)}`)
+              : null)
           : null,
 
-        // ── 账号信息 ──
-        user ? h('div', {},
-          h('div', { style: S.row },
-            h('div', { style: S.label }, `${user.name} · ${user.speed}`),
-            h('span', { style: S.badge(true) }, user.realname === 2 ? '已实名' : `实名 L${user.realname}`)),
-          // 进度条 + 右侧百分比：百分比紧贴条尾，一眼看到"还剩多少"
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-            h('div', { style: { ...S.trafficBar, flex: '1 1 auto', minWidth: 0, marginTop: '6px' } },
+        // 流量条：百分比紧贴条尾，一眼看到「还剩多少」
+        user
+          ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+            h('span', {
+              style: { ...S.label, fontSize: '12px', fontWeight: 500, flex: 'none', maxWidth: '46%',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+              title: `${user.name} · ${user.speed}`,
+            },
+              h('span', { style: S.badge(true) }, user.realname === 2 ? '已实名' : `实名 L${user.realname}`),
+              ' ',
+              `${user.name} · ${user.speed}`),
+            h('div', { style: { ...S.trafficBar, flex: '1 1 auto', minWidth: 0, marginTop: 0 } },
               h('div', { style: S.trafficFill(remainPct) })),
             h('span', {
               style: {
@@ -499,144 +1230,364 @@ window.__ModuleLoader__.load({
               title: hasPlan
                 ? `剩余 ${fmtBytes(baseRemaining)} / 总量 ${fmtBytes(baseTotal)}`
                 : '未取到流量包总量，按「今日+剩余」估算',
-            }, remainPctText)),
-          h('div', { style: { ...S.hint, display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } },
-            h('span', {}, `今日已用 ${fmtBytes(todayUsed)}`),
-            h('span', {}, `剩余 ${fmtBytes(remaining)}`))) : null,
-
-        h('div', { style: S.divider }),
-
-        // ── 隧道选择 ──
-        h('div', {},
-          h('div', { style: S.row },
-            h('div', { style: S.label }, '隧道'),
-            tunnels && tunnels.length
-              ? h('select', {
-                style: { ...S.input, width: 'auto' },
-                value: st.tunnelId || '',
-                disabled: busy,
-                onChange: (e) => apply({ tunnelId: e.target.value }),
-              },
-                tunnels.map((t) => h('option', { key: t.id, value: String(t.id) },
-                  `${t.name} · ${t.nodeName}${t.online ? '' : ' · 离线'}`)))
-              : h('span', { style: S.hint }, st.tunnelId ? `ID ${st.tunnelId}（列表加载中…）` : '未配置')),
-
-          tunnels && tunnels.length
-            ? h('div', { style: { ...S.hint, marginTop: '6px' } },
-              (() => {
-                const t = tunnels.find((x) => String(x.id) === String(st.tunnelId))
-                if (!t) return null
-                const mismatch = Number(t.local_port) !== Number(st.gatePort)
-                return mismatch
-                  ? h('span', { style: S.warn },
-                    `⚠ 面板端口 ${t.local_port} ≠ 网关 ${st.gatePort}，公网访问会 502。`)
-                  : h('span', { style: S.ok }, `✓ 面板端口 ${t.local_port} = 网关端口（已对齐）`)
-              })())
-            : null,
-
-          h('div', { style: { display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-            h('button', {
-              type: 'button', style: busy ? { ...S.btnGhost, opacity: 0.6 } : S.btnGhost,
-              disabled: busy, onClick: doAlign,
-            }, '一键对齐面板端口'),
-            h('button', {
-              type: 'button', style: S.btnGhost, onClick: () => void loadExtra(),
-            }, '刷新'),
-            h(ExternalLink, {
-              href: 'https://www.natfrp.com/user/',
-              style: { fontSize: '12px', marginLeft: 'auto' },
-            }, '管理面板 ↗'),
-            h(ExternalLink, {
-              href: 'https://www.natfrp.com/tunnel/domain',
-              style: { fontSize: '12px' },
-            }, '子域绑定 ↗'),
-            h(ExternalLink, {
-              href: 'https://doc.natfrp.com/bestpractice/domain-bind.html',
-              style: { fontSize: '12px' },
-            }, '绑定教程 ↗')),
-
-          h('div', { style: { ...S.hint, marginTop: '6px' } },
-            '新建/删除隧道、换节点、看流量明细都在管理面板；这里只做选择与启动。'),
-
-          frpc.tunnelUrl
-            ? h('div', { style: { ...S.hint, marginTop: '6px' } },
-              '默认域名（', h('span', { style: S.code }, 'xxx.nyat.app'),
-              '）访问会有证书警告，部分浏览器继续后仍白屏；',
-              h(ExternalLink, {
-                href: 'https://www.natfrp.com/tunnel/domain',
-              }, '绑定子域名'), ' 后用 ', h('span', { style: S.code }, '你的子域名:远程端口'),
-              ' 访问即可消除。')
-            : null),
-
-        h('div', { style: S.divider }),
-
-        // ── 网关 ──
-        h('div', { style: S.row },
-          h('div', { style: S.label }, '本地网关'),
-          h('span', { style: S.badge(st.gateRunning) },
-            st.gateRunning ? `:${st.gatePort} 运行中` : '未运行')),
-
-        !st.gatePasswordConfigured
-          ? h('div', { style: S.warn }, '⚠ 未设置访问密码，公网任何人都能进入你的 DSH。')
+            }, remainPctText))
           : null,
 
-        h('div', {},
-          h('div', { style: S.label }, '网关端口'),
-          h('div', { style: S.hint },
-            'frpc 连到这里。改端口会自动重启 frpc，并用「一键对齐」语义同步面板。'),
-          h('input', {
-            style: { ...S.input, marginTop: '6px' },
-            value: gatePort,
-            placeholder: '3083',
-            onChange: (e) => setGatePort(e.target.value.replace(/[^0-9]/g, '')),
-          })),
+        h('div', { style: S.divider }),
 
+        // ── 连接设置 ──
+        // 这里的先后顺序就是操作顺序：密钥 → 隧道 → 端口 → 密码 → 保存。
+        // ⚠️ 密钥必须排第一：隧道列表要靠它调官方接口才拉得到。
+        // ⚠️ 隧道排在端口前面：选定隧道后本机端口会自动跟随隧道里的端口，
+        //    用户不必先猜一个数字再去面板里对齐。
+        // 版式：分区标题和官方入口同一行；每个字段「标题 | 控件」一行，
+        //       说明文字收进 placeholder / 悬停提示，不再每个字段占三层。
         h('div', {},
-          h('div', { style: S.label }, '网关访问密码'),
-          h('div', { style: S.hint },
-            st.gatePasswordConfigured ? '已设置。留空 = 保持不变；填写则覆盖。' : '建议 20 位以上随机串。'),
-          h('input', {
-            style: { ...S.input, marginTop: '6px' },
-            type: 'password', value: gatePassword, placeholder: '留空 = 保持不变',
-            autoComplete: 'new-password',
-            onChange: (e) => setGatePassword(e.target.value),
-          })),
+          h('div', { style: { ...S.row, gap: '10px', flexWrap: 'wrap' } },
+            h('div', { style: S.label }, '连接设置')),
+          // 右上角不再挂那两个域名外链：它们都在讲域名，
+          // 而域名提示要等隧道跑起来才出现，提前挂在这里只会分散注意力。
+          // 教程链接已挪到那句域名提示的末尾 —— 缺什么点什么。
 
-        h('div', {},
-          h('div', { style: S.label }, 'SakuraFrp 访问密钥'),
-          h('div', { style: S.hint },
-            st.tokenConfigured ? '已配置。留空 = 保持不变；填写则覆盖。' : '管理面板 → 用户信息 → 查看访问密钥。'),
-          h('input', {
-            style: { ...S.input, marginTop: '6px' },
-            type: 'password', value: token, placeholder: '留空 = 保持不变',
-            autoComplete: 'new-password',
-            onChange: (e) => setToken(e.target.value),
-          })),
+          nextHint
+            ? h('div', { style: { ...S.hint, marginTop: '3px' } }, nextHint)
+            : null),
+
+        // ① 访问密钥：「获取密钥」紧跟输入框（它解释的就是这个框从哪来）。
+        //    保存做成输入框内嵌按钮 —— 贴在框里右上角，粘完密钥手不用离开输入区；
+        //    而且只有框里真有东西时才出现，空框上挂个「保存」纯属噪音。
+        h('div', { style: S.field },
+          h('div', { style: S.flabel, title: 'SakuraFrp 管理面板 → 用户信息 → 查看访问密钥' },
+            '① SakuraFrp 访问密钥'),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap' } },
+            h('div', { style: { position: 'relative', flex: '1 1 130px', minWidth: 0, display: 'flex' } },
+              h('input', {
+                // 有内嵌按钮时右侧留出它的宽度，否则长密钥会钻到按钮底下
+                style: { ...S.input, flex: '1 1 auto', minWidth: 0, paddingRight: token.trim() ? '50px' : '9px' },
+                type: 'password', value: token,
+                placeholder: st.tokenConfigured ? '已配置，留空保持不变' : '粘贴访问密钥',
+                autoComplete: 'new-password',
+                onChange: (e) => setToken(e.target.value),
+              }),
+              token.trim()
+                ? h('button', {
+                  type: 'button',
+                  title: '保存密钥并加载隧道',
+                  style: {
+                    position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)',
+                    padding: '2px 7px', fontSize: '11px', lineHeight: 1.5,
+                    borderRadius: '4px', border: 'none', cursor: busy ? 'default' : 'pointer',
+                    background: '#4f6ef7', color: '#fff', opacity: busy ? 0.6 : 1,
+                  },
+                  disabled: busy,
+                  onClick: saveAll,
+                }, busy ? '…' : '保存')
+                : null),
+            st.tokenConfigured
+              ? h('button', {
+                type: 'button',
+                style: { ...S.btnGhost, flex: 'none', fontSize: '12px', padding: '4px 9px' },
+                disabled: busy,
+                onClick: () => {
+                  const ok = typeof window === 'undefined' || window.confirm(
+                    '清除后隧道列表和 frpc 都会失效，需要重新填密钥。确定清除？')
+                  if (!ok) return
+                  void apply({ clearToken: true }).then((done) => {
+                    if (!done) return
+                    // 密钥没了 → 列表也拉不到了，直接清空，别留着上一轮的旧数据
+                    setTunnels([])
+                    setSyncMsg('')
+                  })
+                },
+              }, '清除')
+              : null,
+            h(ExternalLink, {
+              href: 'https://www.natfrp.com/user/',
+              title: '打开 SakuraFrp 管理面板，在「用户信息」里查看访问密钥',
+              style: { flex: 'none', fontSize: '12px', whiteSpace: 'nowrap' },
+            }, '获取密钥 ↗'))),
+
+        // ── ② 隧道 ──
+        // 有密钥才出现：列表要凭密钥才拉得到，没密钥时这一块只会显示「加载中…」。
+        // 选完由服务端把本机端口改成隧道里的端口，所以不用在下面再手填一遍端口。
+        showTunnel ? h('div', {},
+          // 用和 ①③④ 一样的 grid 版式，标签与下拉框的列位置对齐，
+          // 别用 space-between —— 那会让下拉框被推到最右边，和上一行错开一截
+          h('div', { style: S.field },
+            h('div', { style: S.flabel }, '② 隧道'),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 } },
+              tunnels && tunnels.length
+                ? h('select', {
+                  style: { ...S.input, flex: '1 1 auto', minWidth: 0 },
+                  value: st.tunnelId || '',
+                  disabled: busy,
+                  onChange: (e) => {
+                    // 在列表里挑了一条现成的 → 新建表单没有存在的理由了，直接收起。
+                    // 否则下面会同时挂着「已选好的隧道」和「一份填了一半的新建表单」，
+                    // 让人不知道该按哪个。
+                    if (newOpen) { setNewOpen(false); setCreateErr('') }
+                    return apply({ tunnelId: e.target.value })
+                      .then((done) => { if (done) void loadExtra() })
+                  },
+                },
+                  // 必须有这个空值项：tunnelId 未配置时 select 会默认显示第一项，
+                  // 看起来像「已经选好了」，实际服务端是空的。
+                  h('option', { value: '' }, '— 请选择隧道 —'),
+                  // 不再拼「· 离线」：这条信息对「选哪条」没有帮助，纯噪音
+                  tunnels.map((t) => h('option', { key: t.id, value: String(t.id) },
+                    `${t.name} · ${t.nodeName}`)))
+                : h('span', { style: { ...S.hint, marginTop: 0, flex: '1 1 auto' } },
+                  st.tokenConfigured ? '列表加载中…' : '还没有密钥，取不到隧道列表'),
+              /**
+               * 按钮跟着下拉框的状态走：
+               *   还停在「请选择隧道」→「新建」（这就是他此刻唯一能做的事）
+               *   已经选好了        →「＋ 新建」（多一条备选）
+               *   表单展开中        →「取消」
+               */
+              h('button', {
+                type: 'button',
+                style: { ...S.btnGhost, flex: 'none' },
+                disabled: busy,
+                onClick: () => {
+                  if (newOpen) { setNewOpen(false); setCreateErr('') } else void openCreate()
+                },
+              }, newOpen ? '取消' : st.tunnelId ? '＋ 新建' : '新建'))),
+
+          // ── 新建隧道（内联表单，不跳页面）──
+          // 只建 TCP：不用域名、不用配解析，远程端口官方自动分配。
+          newOpen
+            ? h('div', {
+              style: {
+                marginTop: '6px', padding: '9px 11px', borderRadius: '8px',
+                background: 'rgba(127,127,127,.08)',
+                display: 'flex', flexDirection: 'column', gap: '7px',
+              },
+            },
+              h('div', { style: S.hint },
+                '新建一条 TCP 隧道直连本机；远程端口由官方自动分配，你不用填。'),
+
+              /**
+               * 名字 / 端口 / 节点 / 保存 全挤在同一行。
+               * 这三项都是「这条隧道自己的参数」，各占一整行只是白吃高度
+               * （展开表单时整个面板也就四五百像素高）。
+               * 一行里塞不下三个「标题 | 控件」小网格，所以标签交给 placeholder 和 title。
+               */
+              h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+                h('input', {
+                  style: { ...S.input, flex: '1 1 110px', minWidth: '72px' },
+                  title: '隧道名，留空就叫 DSH',
+                  value: newName, placeholder: '名字（留空叫 DSH）', disabled: busy,
+                  onChange: (e) => setNewName(e.target.value),
+                }),
+                h('input', {
+                  style: { ...S.input, flex: '0 0 76px', width: '76px' },
+                  title: '这条隧道要连的本机端口。建好后插件自己的端口也会改成它。',
+                  value: newPort, placeholder: '端口', disabled: busy, inputMode: 'numeric',
+                  onChange: (e) => {
+                    setNewPortMsg('')
+                    setNewPort(e.target.value.replace(/[^0-9]/g, ''))
+                  },
+                  onBlur: () => void checkNewPort(),
+                }),
+                // 节点改成下拉框：原来那个内嵌列表最高 150px，展开时把面板撑出一截；
+                // 下拉一收就只占一行。代价是 <option> 无法着色，状态只能写进文字。
+                nodeErr
+                  ? h('span', { style: { ...S.err, flex: '1 1 140px' } }, nodeErr)
+                  : !nodes
+                    ? h('span', { style: { ...S.hint, marginTop: 0, flex: '1 1 140px' } }, '节点加载中…')
+                    // 空列表要说清原因，别只给一个空框
+                    : nodes.length === 0
+                      ? h('span', { style: { ...S.warn, flex: '1 1 140px' } }, '没有可用节点（可能都离线了）')
+                      : h('select', {
+                        style: { ...S.input, flex: '1 1 150px', minWidth: 0 },
+                        value: newNode, disabled: busy,
+                        onChange: (e) => setNewNode(e.target.value),
+                      },
+                        h('option', { value: '' }, '— 选择节点 —'),
+                        nodes.map((n) => {
+                          const st2 = nodeStatus(n)
+                          const can = n.createAllowed !== false
+                          return h('option', {
+                            key: n.id, value: String(n.id), disabled: !can,
+                          }, `${n.name}${n.mainland ? ' · 内地' : ''} · ${can ? st2.text : '不可新建'}`)
+                        })),
+                h('button', {
+                  type: 'button',
+                  style: busy ? { ...S.btn, flex: 'none', opacity: 0.6 } : { ...S.btn, flex: 'none' },
+                  disabled: busy || !nodes,
+                  onClick: doCreate,
+                }, busy ? '创建中…' : '保存')),
+
+              // 端口检测结论与报错都压到主行下面 —— 主行只放「填什么」和「提交」
+              newPortMsg
+                ? h('div', { style: { ...S.hint, marginTop: 0, color: newPortOk ? '#16a34a' : '#d97706' } }, newPortMsg)
+                : null,
+
+              createErr ? h('div', { style: S.err }, createErr) : null)
+            : null,
+
+          // 选了隧道但本机端口还空着：这时候谈不上「对不上」，只差一个数字
+          pickedTunnel && gatePortNum === null
+            ? h('div', { style: { ...S.warn, marginTop: '4px' } },
+              tunnelPort
+                ? `这条隧道连本机 ${tunnelPort}，插件还没设端口 —— 到 ③ 填 ${tunnelPort} 就对上了。`
+                : '插件还没设端口，先到 ③ 填一个（比如 3083）。')
+            : null,
+
+          /**
+           * 端口对不上（比如在官方面板里改过）：一行提示 + 一个按钮就够了。
+           * ⚠️ 全篇不出现「对齐」—— 用户不知道在对齐什么，只说清事实。
+           */
+          pickedTunnel && portMismatch
+            ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '4px' } },
+              h('span', { style: S.warn },
+                `面板里这条隧道连的是本机 ${tunnelPort}，插件在 ${gatePortNum} —— 外网会打不开。`),
+              h('button', {
+                type: 'button', style: busy ? { ...S.btnGhost, opacity: 0.6 } : S.btnGhost,
+                disabled: busy, onClick: doAlign,
+              }, `把隧道端口改成 ${gatePortNum}`))
+            : null,
+
+          // 官方提醒（新建隧道时的节点规则 / 配额说明）会常驻，必须能关掉：
+          // 它讲的是「以后注意」，不是「现在就错了」，赖着不走反而像一直在报错。
+          alignMsg
+            ? h('div', {
+              style: {
+                ...(/^没改成/.test(alignMsg) ? S.err : /^⚠/.test(alignMsg) ? S.warn : S.ok),
+                marginTop: '4px',
+                display: 'flex', alignItems: 'flex-start', gap: '8px',
+              },
+            },
+              h('span', { style: { flex: '1 1 auto', minWidth: 0 } }, alignMsg),
+              h('button', {
+                type: 'button',
+                title: '关掉这条提醒',
+                style: {
+                  flex: 'none', fontSize: '11px', padding: '1px 7px', borderRadius: '5px',
+                  border: '1px solid currentColor', background: 'transparent',
+                  color: 'inherit', cursor: 'pointer', opacity: 0.75, lineHeight: 1.5,
+                },
+                onClick: () => setAlignMsg(''),
+              }, '关闭'))
+            : null,
+
+          // 域名提示：只在隧道真跑起来后才有意义（没有公网地址时说了也白说）。
+          // 只有「绑定证书」四个字带链接，「不」留在外面 —— 这是个否定句，
+          // 把「不」也染成链接色会变成「不去绑定证书」，读起来正好相反。
+          frpc.tunnelUrl
+            ? h('div', { style: { ...S.hint, marginTop: '4px' } },
+              '不',
+              h(ExternalLink, {
+                href: 'https://www.natfrp.com/tunnel/domain',
+                style: { fontSize: '12px', whiteSpace: 'nowrap' },
+              }, '绑定证书 ↗'),
+              ' 会出现证书警告、白屏等；绑定子域名后即可消除。', ' ',
+              h(ExternalLink, {
+                href: 'https://doc.natfrp.com/bestpractice/domain-bind.html',
+                style: { fontSize: '12px', whiteSpace: 'nowrap' },
+              }, '绑定教程 ↗'))
+            : null)
+          : null,
+
+        // ③ 本机端口：选了隧道才出现（端口就是往这条隧道里送的，没隧道时填它没意义）。
+        //    填完就查一次能不能用；改它会把隧道里的端口一起改掉。
+        showPort ? h('div', { style: S.field },
+          h('div', {
+            style: S.flabel,
+            title: '穿透流量从这个端口进出。改这里会同时把 SakuraFrp 面板里这条隧道的「本地端口」改成一样的数。',
+          }, '③ 本机端口'),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+            h('input', {
+              style: { ...S.input, width: '92px', flex: 'none' },
+              value: gatePort,
+              // 空就是空，不给占位数字冒充默认值：占位符一旦长得像已填好的值，
+              // 用户会以为端口已经定了，直接点保存。
+              placeholder: '例如 3083',
+              onChange: (e) => {
+                portDirty.current = true // 用户正在编辑，轮询不要覆盖
+                setPortMsg('')
+                setSyncMsg('')
+                setGatePort(e.target.value.replace(/[^0-9]/g, ''))
+              },
+              onBlur: () => void checkPort(gatePort),
+            }),
+            portMsg
+              ? h('span', {
+                style: { ...S.hint, marginTop: 0, color: portOk ? '#16a34a' : '#d97706' },
+              }, portMsg)
+              : h('span', { style: { ...S.hint, marginTop: 0 } },
+                gatePortNum ? '改这里会同时改隧道里的端口' : '还没填，比如 3083'))) : null,
+
+        // 端口同步的结果（保存或选隧道后才有），没有就不占行
+        syncMsg ? h('div', { style: /^⚠/.test(syncMsg) ? S.warn : S.ok }, syncMsg) : null,
+
+        // ④ 访问密码：等端口确认可用才出现。
+        //    到这里才是「能被外网访问了」，此时设密码才有对象可言；
+        //    前面几步还没成型就先摆一个密码框，只会让人以为非填不可。
+        showPassword ? h('div', { style: S.field },
+          h('div', {
+            style: S.flabel,
+            title: '建议 20 位以上随机串。没密码时外网一律打不开（防止 DSH 被别人白用）。',
+          }, '④ 访问密码'),
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            h('input', {
+              style: S.input,
+              type: 'password', value: gatePassword,
+              placeholder: st.gatePasswordConfigured ? '已设置，留空保持不变' : '建议 20 位以上随机串',
+              autoComplete: 'new-password',
+              onChange: (e) => setGatePassword(e.target.value),
+            }),
+            st.gatePasswordConfigured
+              ? h('button', {
+                type: 'button',
+                style: { ...S.btnGhost, flex: 'none', fontSize: '12px' },
+                disabled: busy,
+                onClick: () => {
+                  const ok = typeof window === 'undefined' || window.confirm(
+                    '清除后外网访问会一直失败，直到重新设置密码。确定清除？')
+                  if (!ok) return
+                  void apply({ clearGatePassword: true })
+                },
+              }, '清除')
+              : null)) : null,
+
+        showPassword && !st.gatePasswordConfigured
+          ? h('div', { style: S.warn },
+            '⚠ 还没设密码。没密码时外网一律打不开（防止 DSH 被别人白用），请填一个再保存。')
+          : null,
 
         // ── 保存 ──
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
-          h('button', {
-            type: 'button', style: busy ? { ...S.btn, opacity: 0.6 } : S.btn,
-            disabled: busy,
-            onClick: () => {
-              const patch = {}
-              if (gatePort) patch.gatePort = Number(gatePort)
-              if (gatePassword.trim()) patch.gatePassword = gatePassword.trim()
-              if (token.trim()) patch.token = token.trim()
-              apply(patch).then(() => { setToken(''); setGatePassword('') })
-            },
-          }, busy ? '保存中…' : '保存'),
-          saved ? h('span', { style: S.ok }, saved) : null,
-          alignMsg ? h('span', { style: alignMsg.startsWith('失败') ? S.err : S.ok }, alignMsg) : null,
-          err ? h('span', { style: S.err }, err) : null),
+        // 主保存按钮在 ① 右侧（粘贴完密钥顺手就能存）；这里留一个次级入口，
+        // 因为改完 ④ 密码时视线就在底部，不必再滚回面板顶部找按钮。
+        // 两个按钮同一份逻辑（saveAll），不会出现「这个能存、那个不能存」。
+        showTunnel
+          ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '2px' } },
+            h('button', {
+              type: 'button', style: busy ? { ...S.btnGhost, opacity: 0.6 } : S.btnGhost,
+              disabled: busy,
+              onClick: saveAll,
+            }, busy ? '保存中…' : '保存'),
+            saved ? h('span', { style: S.ok }, saved) : null,
+            err ? h('span', { style: S.err }, err) : null,
+            !err && pollErr ? h('span', { style: S.err }, pollErr) : null)
+          : h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
+            saved ? h('span', { style: S.ok }, saved) : null,
+            err ? h('span', { style: S.err }, err) : null,
+            !err && pollErr ? h('span', { style: S.err }, pollErr) : null),
 
         // ── 日志 ──
-        // ⚠️ 不再给 <pre> 单独设 maxHeight + overflow：主面板本身已是滚动容器，
-        // 嵌套滚动会让「鼠标停在日志上时滚不动外层」，且日志尾部被二次裁切。
-        // 改为随内容增高，滚动手势统一交给外层。
+        // 不再单独加分割线：按钮本身就是边界，多一条线多占一行高度
+        // ⚠️ 日志现在默认展开且每 2s 刷新，所以必须限高：frpc 跑久了能写几千行，
+        //    不限高就会把整个设置页拉成一屏都装不下的一条长条。
+        //    限高后鼠标停在日志上滚动只在日志内部走，滚到边界会自然交给外层，
+        //    因此不会出现「滚不动外层」——「在新窗口打开」也留着，看全量用那个。
         h('div', {},
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-            h('button', { type: 'button', style: S.btnGhost, onClick: () => void loadLogs() },
+            h('button', {
+              type: 'button',
+              style: { ...S.btnGhost, padding: '3px 10px', fontSize: '12px' },
+              onClick: () => setLogsOpen((v) => !v),
+            },
               logsOpen ? '收起日志' : '展开 frpc 日志'),
             logsOpen
               ? h('button', {
@@ -647,11 +1598,17 @@ window.__ModuleLoader__.load({
               : null),
           logsOpen
             ? h('pre', {
+              ref: logRef,
+              // 自动跟到最新一行，但用户往上翻看旧日志时不抢滚动条
+              onScroll: (e) => {
+                const el = e.currentTarget
+                logPinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+              },
               style: {
-                marginTop: '8px', padding: '10px', borderRadius: '6px',
+                marginTop: '6px', padding: '8px 10px', borderRadius: '6px',
                 background: 'rgba(127,127,127,.08)', fontSize: '11px', lineHeight: 1.5,
                 whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                maxHeight: 'none', overflow: 'visible',
+                maxHeight: '220px', overflowY: 'auto',
               },
             }, logs || '(空)')
             : null),
