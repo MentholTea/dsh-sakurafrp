@@ -1,4 +1,4 @@
-// dsh-natfrp — 宿主半侧。
+// dsh-sakurafrp — 宿主半侧。
 //
 // 数据流：
 //   公网 → frpc(-f 语义, env 鉴权) → 127.0.0.1:<gatePort>(本插件网关)
@@ -10,7 +10,7 @@
 // 先 POST /tunnel/edit 改成 gatePort，再拉起 frpc —— 根治「隧道成功但 502」。
 
 import { createServer } from 'node:http'
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { readFileSync, mkdirSync, writeFileSync, existsSync, renameSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -22,9 +22,27 @@ export const name = 'natfrp'
 export const inject = ['credentials', 'webServer', 'timer', 'connection']
 
 const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), '.dsh')
-const DATA_DIR = join(DSH_HOME, 'dsh-natfrp')
+const DATA_DIR = join(DSH_HOME, 'dsh-sakurafrp')
+const LEGACY_DATA_DIR = join(DSH_HOME, 'dsh-natfrp') // 2.0.0 之前（旧包名）用过的目录
 const STATE_PATH = join(DATA_DIR, 'state.json')
 const PASSWORD_FILE = join(DATA_DIR, 'gate-password.txt')
+
+/**
+ * 一次性迁移旧状态目录（包名从 dsh-natfrp 改为 dsh-sakurafrp 时）。
+ * 只在「新目录不存在、旧目录存在」时整目录 rename，避免用户丢网关密码与隧道选择。
+ * 任何失败都静默放过：迁移不了就当首次使用，绝不能让插件起不来。
+ */
+function migrateLegacyDataDir() {
+  try {
+    if (existsSync(DATA_DIR)) return
+    if (!existsSync(LEGACY_DATA_DIR)) return
+    mkdirSync(DSH_HOME, { recursive: true })
+    renameSync(LEGACY_DATA_DIR, DATA_DIR)
+  } catch {
+    // 跨设备/权限不足等 —— 退化为重新配置一次
+  }
+}
+migrateLegacyDataDir()
 
 function safeRead(p) {
   if (!p) return ''

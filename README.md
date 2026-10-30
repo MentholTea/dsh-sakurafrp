@@ -1,4 +1,4 @@
-# dsh-natfrp
+# dsh-sakurafrp
 
 DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**。
 同一台机器上装了本插件后，不需要再开 SakuraLauncher。
@@ -43,10 +43,10 @@ Web 设备 → xxx.nyat.app:端口 → SakuraFrp 节点 → frpc(本插件托管
 
 ```powershell
 # 一条命令（desktop profile）
-dsh plugin --profile desktop add dsh-natfrp -w
+dsh plugin --profile desktop add dsh-sakurafrp -w
 
 # web / CLI 场景把 --profile 换成你的 profile 名，例如：
-# dsh plugin --profile web add dsh-natfrp -w
+# dsh plugin --profile web add dsh-sakurafrp -w
 
 # 然后重启 DSH
 ```
@@ -57,8 +57,8 @@ dsh plugin --profile desktop add dsh-natfrp -w
    （`~/.dsh/bin/frpc-standalone` 为非 Windows 平台），`frpc -V` 输出应含 `sakura`
 2. 重启 DSH → 设置页填访问密钥 → 下拉选隧道 → 设公网密码
 
-> 想走源码：`git clone https://github.com/MentholTea/dsh-natfrp.git` 后把
-> `dependencies` 写成 `"dsh-natfrp": "link:<克隆目录绝对路径>"`，并加入
+> 想走源码：`git clone https://github.com/MentholTea/dsh-sakurafrp.git` 后把
+> `dependencies` 写成 `"dsh-sakurafrp": "link:<克隆目录绝对路径>"`，并加入
 > `dsh.profile.bundles`，再 `dsh plugin --profile desktop install`。
 
 frpc 可执行文件默认取 `~/.dsh/bin/frpc-standalone(.exe)`（Sakura 官方分发版，
@@ -74,7 +74,7 @@ frpc 可执行文件默认取 `~/.dsh/bin/frpc-standalone(.exe)`（Sakura 官方
 | `tokenFile` | — | 访问密钥文件（优先级最高；设置页写密钥即写此文件） |
 | `tokenRef` | `NATFRP_TOKEN` | tokenFile 为空时走 DSH credentials |
 | `gatePort` | `3083` | 网关端口 = 隧道面板的「本地端口」 |
-| `gatePassword` | — | 公网密码；也可用设置页写（落 `~/.dsh/dsh-natfrp/gate-password.txt`） |
+| `gatePassword` | — | 公网密码；也可用设置页写（落 `~/.dsh/dsh-sakurafrp/gate-password.txt`） |
 | `autoAlign` | `true` | 启动前自动对齐面板 local_port |
 | `maxLogLines` | `500` | 日志环形缓冲行数 |
 
