@@ -1,0 +1,28 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.tgz
+
+# DSH 运行时数据（含访问密钥、网关密码，绝不能提交）
+.dsh/
+state.json
+gate-password.txt
+*token*
+*.token
+
+# 日志与临时文件
+*.log
+logs/
+tmp/
+*.tmp
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地环境变量
+.env
+.env.*

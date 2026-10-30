@@ -1,0 +1,11 @@
+{
+  "natfrp": {
+    "title": "内网穿透 (SakuraFrp)",
+    "desc": "托管 SakuraFrp frpc：隧道选择、端口自动对齐、流量统计、公网密码门。",
+    "errNoToken": "访问密钥未配置",
+    "errNoTunnel": "未配置隧道 ID",
+    "kickSuspect": "疑似互踢",
+    "tunnelUp": "隧道已上线",
+    "aligned": "已对齐"
+  }
+}
