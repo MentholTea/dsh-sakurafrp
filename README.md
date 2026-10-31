@@ -22,17 +22,18 @@ DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**
 
 **0. 装插件**
 
-推荐用 Release 里的预构建包——**不经过 npm，不需要本地构建，一条命令即可**：
-
 ```powershell
-dsh plugin --profile desktop add https://github.com/MentholTea/dsh-sakurafrp/releases/latest/download/dsh-sakurafrp.tgz -w
+dsh plugin --profile desktop add dsh-sakurafrp -w
 # web / CLI 场景把 --profile 换成你的 profile 名，例如 --profile web
 ```
 
-> **为什么默认给这条，而不是 `dsh plugin add dsh-sakurafrp`？**
-> 那个 npm 包名目前没有可用版本（同名包此前撤下过）。
-> 如果你执行 npm 版本看到 `ERR_PNPM_NO_VERSIONS`，说明还没重新发布，
-> 用上面这条 tarball 命令即可，功能完全一样。
+> **装不上就换这条**（不经过 npm，直接取 GitHub Release 的预构建包）：
+>
+> ```powershell
+> dsh plugin --profile desktop add https://github.com/MentholTea/dsh-sakurafrp/releases/latest/download/dsh-sakurafrp.tgz -w
+> ```
+>
+> 两条命令装的是同一个版本，功能完全一样。
 
 重启 DSH。若设置页提示未装 frpc，点一次「一键安装」——插件会按平台/架构自动下载。
 
@@ -120,7 +121,7 @@ Web 设备 → xxx.nyat.app:端口 → SakuraFrp 节点 → frpc(本插件托管
 
 ## 安装（详细）
 
-**方式 A：从 npm 装**（包已发布时）
+**方式 A：从 npm 装**（推荐）
 
 ```powershell
 dsh plugin --profile desktop add dsh-sakurafrp -w
@@ -128,10 +129,11 @@ dsh plugin --profile desktop add dsh-sakurafrp -w
 # 然后重启 DSH
 ```
 
-> 如果这条命令报 `404 / not found`，说明 npm 上暂时没有可用版本（同名包撤下后有
-> 24 小时冷却），改用下面的源码方式，或直接用 Release 里的预构建包。
+> 装完请确认 `dsh.profile.bundles` 里有 `dsh-sakurafrp`——没有这一条，DSH 不会加载插件。
+> 正常情况会自动写入；若你看到安装过程报错退出（例如别的插件的构建脚本未获批准），
+> 这一步会被跳过，需要手工补上。
 
-**方式 A2：从 Release tarball 装**（不走 npm，也不需要构建）
+**方式 A2：从 Release tarball 装**（不走 npm，也不需要构建，与方式 A 同版本）
 
 ```powershell
 dsh plugin --profile desktop add https://github.com/MentholTea/dsh-sakurafrp/releases/latest/download/dsh-sakurafrp.tgz -w
