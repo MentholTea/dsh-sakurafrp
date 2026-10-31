@@ -1,0 +1,129 @@
+name: Release
+
+# 什么时候跑：只在推 tag 时，且 tag 形如 v1.2.3
+# 日常提交不触发——发布是显式动作。
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+# 发布流程要的权限：
+#   contents: write  —— 建 Release、上传资产
+#   id-token: write  —— npm provenance（给包加可验证来源签名）
+permissions:
+  contents: write
+  id-token: write
+
+# tag 发布不取消进行中的任务：一次发布必须完整走完，
+# 半途取消会留下「Release 建了、npm 没发」这类不一致。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 发布
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          # 要读 tag 对应的完整历史，给 gh --generate-notes 用
+          fetch-depth: 0
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      # ---------------------------------------------------------------
+      # 第一道闸：tag 必须与 package.json 的版本一致。
+      # 防止「tag 打了 v2.3.0，包里写的却是 2.2.1」这种低级错误。
+      # ---------------------------------------------------------------
+      - name: 校验 tag 与 package.json 版本一致
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          echo "tag 版本    : $TAG_VERSION"
+          echo "包内版本    : $PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::tag 版本 ($TAG_VERSION) 与 package.json ($PKG_VERSION) 不一致"
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------
+      # 第二道闸：发布前再跑一遍测试。
+      # 因为 tag 可以被直接推上来绕过 CI，这里不能只信之前的 CI 结果。
+      # ---------------------------------------------------------------
+      - name: 跑全部离线测试
+        run: npm test
+
+      # ---------------------------------------------------------------
+      # 打包。npm pack 产出 dsh-sakurafrp-<version>.tgz，
+      # 改名为 dsh-sakurafrp.tgz —— README 里的安装链接依赖这个固定名字：
+      #   releases/latest/download/dsh-sakurafrp.tgz
+      # ---------------------------------------------------------------
+      - name: 打包 tgz
+        run: |
+          npm pack
+          mv dsh-sakurafrp-*.tgz dsh-sakurafrp.tgz
+          ls -lh dsh-sakurafrp.tgz
+          echo "--- 包内容 ---"
+          tar -tzf dsh-sakurafrp.tgz
+
+      # ---------------------------------------------------------------
+      # 建 Release。正文优先级与本地脚本一致：
+      #   docs/release-notes/vX.Y.Z.md 存在就用它，否则自动生成。
+      # ---------------------------------------------------------------
+      - name: 建 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOTES_FILE="docs/release-notes/${GITHUB_REF_NAME}.md"
+          ARGS=(release create "$GITHUB_REF_NAME" dsh-sakurafrp.tgz
+                --title "$GITHUB_REF_NAME"
+                --verify-tag)
+
+          if [ -f "$NOTES_FILE" ]; then
+            echo "用 $NOTES_FILE 作为发布说明"
+            ARGS+=(--notes-file "$NOTES_FILE")
+          else
+            echo "没有 $NOTES_FILE，自动生成发布说明"
+            ARGS+=(--generate-notes)
+          fi
+
+          gh "${ARGS[@]}"
+
+      # ---------------------------------------------------------------
+      # 发 npm。先查 registry 上是否已有这个版本：
+      # 已存在就跳过，避免重复发布把 CI 弄红。
+      # ---------------------------------------------------------------
+      - name: 发布到 npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          PUBLISHED="$(npm view "dsh-sakurafrp@$VERSION" version 2>/dev/null || true)"
+
+          if [ "$PUBLISHED" = "$VERSION" ]; then
+            echo "npm 上已有 $VERSION，跳过发布"
+            exit 0
+          fi
+
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::没有配置 NPM_TOKEN secret，无法发 npm"
+            exit 1
+          fi
+
+          npm publish --provenance --access public
+
+      - name: 汇总
+        if: always()
+        run: |
+          echo "### 发布结果：${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- tag：\`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Release：https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- npm：https://www.npmjs.com/package/dsh-sakurafrp" >> $GITHUB_STEP_SUMMARY

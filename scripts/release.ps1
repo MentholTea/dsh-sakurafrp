@@ -1,11 +1,15 @@
 <#
 .SYNOPSIS
-    发布 dsh-sakurafrp：把 develop 整包合并到 master，打 tag，建 GitHub Release。
+    发布 dsh-sakurafrp：把 develop 整包合并到 master，打 tag，推上去让 CI 发版。
 
 .DESCRIPTION
     遵守 main/develop 双分支流：
       - 日常小改动只提交并推送到 develop
-      - 攒够一批后跑本脚本，在 master 上产生一个 --no-ff 合并点 + tag + Release
+      - 攒够一批后跑本脚本，在 master 上产生一个 --no-ff 合并点 + tag
+
+    本脚本只负责「到 tag 为止」。tag 推上去之后，
+    GitHub Actions 的 release.yml 会接管：跑测试 → 打包 tgz → 建 Release → 发 npm。
+    这样发布动作只在一处执行，不会出现本地和 CI 抢着建 Release。
 
     脚本会依次做：
       1. 环境自检（仓库根、分支、工作区、与远端同步、tag 是否已存在）
@@ -14,9 +18,8 @@
       4. 推送 develop
       5. 切 master，--no-ff 合并 develop
       6. 打 annotated tag vX.Y.Z
-      7. 推送 master 与 tag
-      8. npm pack 出 tgz，改名后作为 Release 资产上传
-      9. 切回 develop
+      7. 推送 master 与 tag（tag 是 CI 的发令枪）
+      8. 切回 develop
 
 .PARAMETER Bump
     版本递增方式：patch / minor / major。与 -Version 二选一。
@@ -24,14 +27,11 @@
 .PARAMETER Version
     显式指定版本号，如 2.3.0。与 -Bump 二选一。
 
-.PARAMETER Notes
-    Release 说明正文。不传则依次尝试：docs/release-notes/vX.Y.Z.md、gh 自动生成。
-
 .PARAMETER SkipTests
-    跳过 npm test。
+    跳过本地 npm test。注意 CI 在发布时仍会跑一遍，跳过只是省本地时间。
 
 .PARAMETER NoPush
-    只做本地合并、打 tag、打包，不推送也不建 Release。用于演练。
+    只做本地合并、打 tag，不推送。用于演练，CI 不会触发。
 
 .PARAMETER DryRun
     只做自检并打印将要做的事，然后退出，不改任何东西。
@@ -40,10 +40,14 @@
     ./scripts/release.ps1 -Bump patch
 
 .EXAMPLE
-    ./scripts/release.ps1 -Version 2.3.0 -Notes "## 新增`n`n- 隧道列表支持搜索"
+    ./scripts/release.ps1 -Version 2.3.0
 
 .EXAMPLE
     ./scripts/release.ps1 -Bump minor -DryRun
+
+.NOTES
+    Release 的说明文字来自 docs/release-notes/vX.Y.Z.md；
+    该文件不存在时由 CI 用 gh --generate-notes 自动生成。
 #>
 [CmdletBinding()]
 param(
@@ -51,8 +55,6 @@ param(
     [string]$Bump,
 
     [string]$Version,
-
-    [string]$Notes,
 
     [switch]$SkipTests,
 
@@ -171,16 +173,6 @@ $existingTag = & git tag --list $tagName
 if ($existingTag) { Fail "tag $tagName 已存在，换个版本号。" }
 Write-Ok "tag $tagName 可用"
 
-# 依赖工具
-$needGh = -not $NoPush
-if ($needGh) {
-    $ghCmd = Get-Command gh -ErrorAction SilentlyContinue
-    if (-not $ghCmd) { Fail '找不到 gh CLI（建 Release 需要）。想只做本地发布可用 -NoPush。' }
-    & gh auth status 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { Fail 'gh 未登录，先 `gh auth login`。' }
-    Write-Ok 'gh 已登录'
-}
-
 # ---------------------------------------------------------------- DryRun 出口
 
 if ($DryRun) {
@@ -190,10 +182,11 @@ if ($DryRun) {
     Write-Info "3) 推送 develop"
     Write-Info "4) 切 master，git merge --no-ff develop"
     Write-Info "5) git tag -a $tagName"
-    Write-Info "6) 推送 master 与 $tagName"
-    Write-Info "7) npm pack 生成 dsh-sakurafrp.tgz"
-    Write-Info "8) gh release create $tagName"
-    Write-Info "9) 切回 develop"
+    Write-Info "6) 推送 master 与 $tagName（触发 CI）"
+    Write-Info "7) 切回 develop"
+    Write-Host ''
+    Write-Info '之后由 GitHub Actions release.yml 接手：'
+    Write-Info '   跑测试 → 打包 tgz → 建 Release → 发 npm'
     Write-Host ''
     Write-Ok 'DryRun 通过，环境可以发布。'
     exit 0
@@ -257,48 +250,12 @@ Write-Ok "$tagName 已创建"
 if ($hasRemote) {
     Write-Step '推送 master 与 tag'
     Invoke-Git push origin master | Out-Null
+    # 推 tag 是「发令枪」：GitHub Actions 的 release.yml 收到它才会构建并发版
     Invoke-Git push origin $tagName | Out-Null
-    Write-Ok '远端已更新'
+    Write-Ok '远端已更新，CI 将接管发布'
 }
 
-# ---------------------------------------------------------------- 8. 打包
-
-Write-Step '打包 tgz'
-$packOut = & npm pack --silent 2>&1
-$packOut = ($packOut | Select-Object -Last 1).Trim()
-if (-not (Test-Path $packOut)) { Fail "npm pack 未产出文件（输出：$packOut）。" }
-$tgzPath = Join-Path $repoRoot 'dsh-sakurafrp.tgz'
-Move-Item -Path $packOut -Destination $tgzPath -Force
-Write-Ok "已生成 $tgzPath"
-
-# ---------------------------------------------------------------- 9. 建 Release
-
-if (-not $NoPush) {
-    Write-Step "建 GitHub Release $tagName"
-
-    $notesFile = Join-Path $repoRoot "docs/release-notes/$tagName.md"
-
-    # 正文来源优先级：-Notes 参数 > docs/release-notes/vX.Y.Z.md > 自动生成
-    # -Notes 直接传给 gh，不落盘，避免发布后在工作区留下未提交文件。
-    $relArgs = @('release', 'create', $tagName, $tgzPath, '--title', $tagName)
-
-    if ($Notes) {
-        $relArgs += @('--notes', $Notes)
-        Write-Info '用 -Notes 参数作为正文'
-    } elseif (Test-Path $notesFile) {
-        $relArgs += @('--notes-file', $notesFile)
-        Write-Info "用 $notesFile 作为正文"
-    } else {
-        $relArgs += '--generate-notes'
-        Write-Info '没有正文来源，改用 gh 自动生成'
-    }
-
-    & gh @relArgs
-    if ($LASTEXITCODE -ne 0) { Fail '建 Release 失败。master 与 tag 已推送，可手动补 Release。' }
-    Write-Ok "Release $tagName 已发布"
-}
-
-# ---------------------------------------------------------------- 10. 回 develop
+# ---------------------------------------------------------------- 8. 回 develop
 
 Write-Step '切回 develop'
 Invoke-Git switch develop | Out-Null
@@ -314,11 +271,18 @@ if ([int]$ahead -gt 0) {
 # ---------------------------------------------------------------- 完成
 
 Write-Host ''
-Write-Host '发布完成' -ForegroundColor Green
+Write-Host '已推送，发布流程已交给 GitHub Actions' -ForegroundColor Green
 Write-Host "    版本   $targetVersion"
 Write-Host "    tag    $tagName"
 if (-not $NoPush) {
-    Write-Host "    Release https://github.com/MentholTea/dsh-sakurafrp/releases/tag/$tagName"
+    Write-Host ''
+    Write-Host '    查看 CI 进度：'
+    Write-Host "      gh run list --workflow=release.yml --limit 3"
+    Write-Host "      gh run watch"
+    Write-Host ''
+    Write-Host '    CI 做完后：'
+    Write-Host "      Release  https://github.com/MentholTea/dsh-sakurafrp/releases/tag/$tagName"
+    Write-Host "      npm      https://www.npmjs.com/package/dsh-sakurafrp/v/$targetVersion"
 }
 Write-Host ''
 Write-Info "下一步仍是日常：在 develop 上继续小步提交。"
