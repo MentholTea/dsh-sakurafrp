@@ -9,6 +9,16 @@ import { frpcBinaryName, expandTilde, resolveDshHome, resolveFrpcPath, displayPa
 const HOME = homedir()
 const DEFAULT_HOME = join(HOME, '.dsh')
 
+// 哪些断言可以用 Windows 盘符写法？
+// paths.mjs 内部用的是 `node:path`，它跟随宿主平台：Linux 的 posix 语义里
+// `D:\x` 不是绝对路径（没有前导 /），会被当成相对名拼到 cwd 后面。
+// 所以凡是拿 `D:\` / `C:\` 当输入或期望值的断言，都要按平台切换写法，
+// 否则同一份测试在 Windows 上全绿、Linux 上必红。
+const IS_WIN = process.platform === 'win32'
+
+// 造一个「宿主的绝对路径」：Windows 用盘符，其它平台用根斜杠。
+const abs = (winPath, posixPath) => (IS_WIN ? winPath : posixPath)
+
 // ── 1) 二进制名 ──
 rec('Windows 带 .exe', frpcBinaryName('win32') === 'frpc-standalone.exe', frpcBinaryName('win32'))
 rec('Linux 无后缀', frpcBinaryName('linux') === 'frpc-standalone')
@@ -26,13 +36,13 @@ rec('非字符串原样', expandTilde(null) === null)
 // ── 3) resolveDshHome 优先级 ──
 {
   // 显式配置最高
-  const r = resolveDshHome('D:\\mydsh', { DSH_HOME: 'E:\\envdsh' })
-  rec('显式配置优先于环境变量', r === resolve('D:\\mydsh'), r)
+  const r = resolveDshHome(abs('D:\\mydsh', '/mydsh'), { DSH_HOME: abs('E:\\envdsh', '/envdsh') })
+  rec('显式配置优先于环境变量', r === resolve(abs('D:\\mydsh', '/mydsh')), r)
 }
 {
   // $DSH_HOME 次之
-  const r = resolveDshHome(undefined, { DSH_HOME: 'E:\\envdsh' })
-  rec('$DSH_HOME 生效', r === resolve('E:\\envdsh'), r)
+  const r = resolveDshHome(undefined, { DSH_HOME: abs('E:\\envdsh', '/envdsh') })
+  rec('$DSH_HOME 生效', r === resolve(abs('E:\\envdsh', '/envdsh')), r)
 }
 {
   // 都没有 → 默认
@@ -50,8 +60,9 @@ rec('非字符串原样', expandTilde(null) === null)
 }
 {
   // 显式配置也可以为空白 → 应被忽略
-  const r = resolveDshHome('  ', { DSH_HOME: 'E:\\envdsh' })
-  rec('空白显式配置被忽略', r === resolve('E:\\envdsh'), r)
+  const envHome = abs('E:\\envdsh', '/envdsh')
+  const r = resolveDshHome('  ', { DSH_HOME: envHome })
+  rec('空白显式配置被忽略', r === resolve(envHome), r)
 }
 {
   // ~ 前缀
@@ -62,24 +73,25 @@ rec('非字符串原样', expandTilde(null) === null)
 // ── 3.5) 从 $DSH_PROFILE_DIR 反推 home ──
 {
   // 标准布局
-  const r = resolveDshHome(undefined, { DSH_PROFILE_DIR: 'D:\\portable\\profiles\\desktop' })
-  rec('从 PROFILE_DIR 反推 home', r === resolve('D:\\portable'), r)
+  const profileDir = abs('D:\\portable\\profiles\\desktop', '/portable/profiles/desktop')
+  const r = resolveDshHome(undefined, { DSH_PROFILE_DIR: profileDir })
+  rec('从 PROFILE_DIR 反推 home', r === resolve(abs('D:\\portable', '/portable')), r)
 }
 {
   // DSH_HOME 存在时优先它，不看 PROFILE_DIR
   const r = resolveDshHome(undefined, {
-    DSH_HOME: 'E:\\realhome',
-    DSH_PROFILE_DIR: 'D:\\wrong\\profiles\\desktop',
+    DSH_HOME: abs('E:\\realhome', '/realhome'),
+    DSH_PROFILE_DIR: abs('D:\\wrong\\profiles\\desktop', '/wrong/profiles/desktop'),
   })
-  rec('DSH_HOME 优先于 PROFILE_DIR 反推', r === resolve('E:\\realhome'), r)
+  rec('DSH_HOME 优先于 PROFILE_DIR 反推', r === resolve(abs('E:\\realhome', '/realhome')), r)
 }
 {
   // 非标准布局 → 不瞎猜，退化默认
-  const r = resolveDshHome(undefined, { DSH_PROFILE_DIR: 'D:\\random\\path' })
+  const r = resolveDshHome(undefined, { DSH_PROFILE_DIR: abs('D:\\random\\path', '/random/path') })
   rec('非 profiles 布局不反推', r === resolve(DEFAULT_HOME), r)
 }
 {
-  const r = resolveDshHome(undefined, { DSH_PROFILE_DIR: 'D:\\x\\profiles' })
+  const r = resolveDshHome(undefined, { DSH_PROFILE_DIR: abs('D:\\x\\profiles', '/x/profiles') })
   rec('段数不足不反推', r === resolve(DEFAULT_HOME), r)
 }
 {
@@ -88,26 +100,29 @@ rec('非字符串原样', expandTilde(null) === null)
 }
 {
   // 显式配置击败所有
-  const r = resolveDshHome('F:\\explicit', {
-    DSH_HOME: 'E:\\env',
-    DSH_PROFILE_DIR: 'D:\\p\\profiles\\desktop',
+  const explicit = abs('F:\\explicit', '/explicit')
+  const r = resolveDshHome(explicit, {
+    DSH_HOME: abs('E:\\env', '/env'),
+    DSH_PROFILE_DIR: abs('D:\\p\\profiles\\desktop', '/p/profiles/desktop'),
   })
-  rec('显式配置最高优先', r === resolve('F:\\explicit'), r)
+  rec('显式配置最高优先', r === resolve(explicit), r)
 }
 
 // inferHomeFromProfileDir 单独测
 {
-  rec('infer: 标准三段以上', inferHomeFromProfileDir('C:\\Users\\a\\.dsh\\profiles\\desktop') === 'C:\\Users\\a\\.dsh',
-    String(inferHomeFromProfileDir('C:\\Users\\a\\.dsh\\profiles\\desktop')))
-  rec('infer: 无 profiles 段返回 null', inferHomeFromProfileDir('C:\\a\\b\\c') === null)
+  const input = abs('C:\\Users\\a\\.dsh\\profiles\\desktop', '/Users/a/.dsh/profiles/desktop')
+  const want = abs('C:\\Users\\a\\.dsh', '/Users/a/.dsh')
+  rec('infer: 标准三段以上', inferHomeFromProfileDir(input) === want,
+    String(inferHomeFromProfileDir(input)))
+  rec('infer: 无 profiles 段返回 null', inferHomeFromProfileDir(abs('C:\\a\\b\\c', '/a/b/c')) === null)
   rec('infer: 空串返回 null', inferHomeFromProfileDir('') === null)
 }
 
 // dshHomeSource
 {
-  rec('source=config', dshHomeSource('D:\\x', {}) === 'config')
-  rec('source=DSH_HOME', dshHomeSource(undefined, { DSH_HOME: 'E:\\h' }) === 'DSH_HOME')
-  rec('source=DSH_PROFILE_DIR', dshHomeSource(undefined, { DSH_PROFILE_DIR: 'D:\\p\\profiles\\desktop' }) === 'DSH_PROFILE_DIR')
+  rec('source=config', dshHomeSource(abs('D:\\x', '/x'), {}) === 'config')
+  rec('source=DSH_HOME', dshHomeSource(undefined, { DSH_HOME: abs('E:\\h', '/h') }) === 'DSH_HOME')
+  rec('source=DSH_PROFILE_DIR', dshHomeSource(undefined, { DSH_PROFILE_DIR: abs('D:\\p\\profiles\\desktop', '/p/profiles/desktop') }) === 'DSH_PROFILE_DIR')
   rec('source=default', dshHomeSource(undefined, {}) === 'default')
 }
 
@@ -150,14 +165,16 @@ rec('非字符串原样', expandTilde(null) === null)
 }
 {
   // 有 $DSH_HOME → 跟随它
-  const r = resolveFrpcPath({ env: { DSH_HOME: 'D:\\portable-dsh' }, platform: 'win32', exists: () => false })
-  rec('$DSH_HOME 下用其插件目录', r.path === join(resolve('D:\\portable-dsh'), 'dsh-sakurafrp', 'frpc-standalone.exe'), r.path)
+  const envHome = abs('D:\\portable-dsh', '/portable-dsh')
+  const r = resolveFrpcPath({ env: { DSH_HOME: envHome }, platform: 'win32', exists: () => false })
+  rec('$DSH_HOME 下用其插件目录', r.path === join(resolve(envHome), 'dsh-sakurafrp', 'frpc-standalone.exe'), r.path)
   rec('来源标记为 plugin-data', r.source === 'plugin-data', r.source)
 }
 {
   // 显式配置绝对路径 → 原样
-  const r = resolveFrpcPath({ configured: 'E:\\tools\\frpc.exe', env: {}, platform: 'win32' })
-  rec('显式绝对路径原样使用', r.path === resolve('E:\\tools\\frpc.exe'), r.path)
+  const configured = abs('E:\\tools\\frpc.exe', '/tools/frpc.exe')
+  const r = resolveFrpcPath({ configured, env: {}, platform: 'win32' })
+  rec('显式绝对路径原样使用', r.path === resolve(configured), r.path)
   rec('来源标记为 config', r.source === 'config', r.source)
 }
 {
@@ -174,12 +191,13 @@ rec('非字符串原样', expandTilde(null) === null)
 }
 {
   // 显式配置优先于 $DSH_HOME
+  const configured = abs('E:\\explicit\\frpc.exe', '/explicit/frpc.exe')
   const r = resolveFrpcPath({
-    configured: 'E:\\explicit\\frpc.exe',
-    env: { DSH_HOME: 'D:\\portable' },
+    configured,
+    env: { DSH_HOME: abs('D:\\portable', '/portable') },
     platform: 'win32',
   })
-  rec('显式配置击败 $DSH_HOME', r.path === resolve('E:\\explicit\\frpc.exe'), r.path)
+  rec('显式配置击败 $DSH_HOME', r.path === resolve(configured), r.path)
 }
 {
   // 空白 $DSH_HOME → 默认，不落 CWD
@@ -191,7 +209,7 @@ rec('非字符串原样', expandTilde(null) === null)
   // 所有结果的 path 都必须是绝对路径（这是能安全写入的前提）
   const cases = [
     resolveFrpcPath({ env: {}, platform: 'win32' }),
-    resolveFrpcPath({ env: { DSH_HOME: 'D:\\x' }, platform: 'linux' }),
+    resolveFrpcPath({ env: { DSH_HOME: abs('D:\\x', '/x') }, platform: 'linux' }),
     resolveFrpcPath({ configured: 'rel/frpc', env: {}, platform: 'darwin' }),
   ]
   rec('结果均为绝对路径', cases.every((c) => isAbsolute(c.path)), cases.map((c) => c.path).join(' | '))
@@ -205,7 +223,7 @@ rec('非字符串原样', expandTilde(null) === null)
   rec('显示串不含用户名', !d.includes(HOME.split(/[\\/]/).pop() ?? '\u0000'), d)
 }
 {
-  const custom = resolve('D:\\portable-dsh')
+  const custom = resolve(abs('D:\\portable-dsh', '/portable-dsh'))
   const p = join(custom, 'bin', 'frpc-standalone.exe')
   const d = displayPath(p, custom)
   rec('自定义位置显示绝对路径', d === p, d)
