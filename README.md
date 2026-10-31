@@ -3,26 +3,77 @@
 DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**。
 同一台机器上装了本插件后，不需要再开 SakuraLauncher。
 
+> [!WARNING]
+> **本插件是「与 AI 对话协作」的产物。** 代码与文档由作者与 AI（DeepSeek Harness 会话）
+> 多轮对话生成并反复迭代而来，**没有经过人工逐行审计**，实测环境也仅限于作者本机的
+> Windows + WSL2。请自行审阅源码后再使用；涉及安全敏感场景时请格外谨慎。
+> 代码按 MIT「按原样（AS IS）」提供，不附带任何担保，风险自负。
+>
+> 与「AI 生成即不可靠」无关的部分：**测试是可复核的**。`npm test` 是 22 个套件、597 项
+> 全离线的断言，其中 `admin-auth-test.mjs` 专门覆盖网关鉴权（8 种路径花招、WS 同权、
+> 改密后旧 cookie 失效）。数字与结论都能自己跑一遍验证，不必只信这段说明。
+
 > **2.1.0 安全修复（重要）**：修复了网关管理接口可被公网未授权访问的问题。
 > 2.0.1 及更早版本按 `remoteAddress` 判断「本机」，但公网流量是 frpc 从
 > `127.0.0.1` 转发进来的，来源地址恒为回环——等于把 `/natfrp/api/*`（含改密码）
 > 敞开给任何能访问隧道的人。现在网关侧只认密码门 cookie，没有就走登录页 / 401。
 > **升级前请确认密码已设置。**
 
+---
+
+## 第一步：装上并连上（四步，约 5 分钟）
+
+只要你是第一次用，照这四步走就行。**这四步在界面上是逐步解锁的**：上一步没到位，
+下一步不会出现，所以不会一上来就被一堆选项淹没。
+
+**0. 装插件**
+
+```powershell
+dsh plugin --profile desktop add dsh-sakurafrp -w
+# web / CLI 场景把 --profile 换成你的 profile 名，例如 --profile web
+```
+
+重启 DSH。若设置页提示未装 frpc，点一次「一键安装」——插件会按平台/架构自动下载。
+
+**1. 拿访问密钥**
+
+到 SakuraFrp 面板 → 用户信息 → 查看访问密钥，复制。
+在设置页 **① 访问密钥** 粘进去，点输入框右侧的「保存」。
+
+**2. 选隧道**
+
+密钥保存后出现 **② 隧道**。下拉选一条已有的；**一条都没有就点「新建」**，
+选个节点（后面标着空闲/一般/拥挤）、填个端口，远端端口交给官方分配。
+
+**3. 填本机端口**
+
+出现 **③ 本机端口**。新装是空的，**必须自己填**——填完立刻检测能不能用。
+选了已有隧道的话这里会自动填好。
+
+**4. 设公网密码**
+
+端口可用后出现 **④ 访问密码**。**强烈建议 20 位以上随机串**，未设密码时外网一律拒绝。
+
+最后点「保存」→ 打开顶部开关 → 手机访问隧道公网地址 → 输密码 → 完整 DSH 界面。
+
+> **两个容易踩的点**
+>
+> - **插件装上默认是关闭的，端口也是空的。** 这东西的作用就是把 DSH 暴露到公网，
+>   装完就该先关着；而不预填端口是因为那等于替你决定了「用这个数字、它现在空闲、
+>   且要写进隧道里」三件都可能不成立的事。
+> - **一定要绑定子域名走 HTTPS。** 用默认域名 `xxx.nyat.app` 直接访问会撞证书警告，
+>   部分浏览器点「继续」后还会白屏。绑定方法见文末[证书警告与白屏问题](#证书警告与白屏问题重要)——
+>   这也是密码不被中间人截获的前提。
+
+---
+
+## 它长什么样
+
 - 设置页入口：**设置 → 内网穿透 (SakuraFrp)**
 - 侧边栏入口：左侧面板列表里的「内网穿透」，带**三色状态点**（🟢已连接 / 🟡未连接 / 🔴故障）
   和一键启停**开关**（🟢开 / 🔴关）；折叠成图标栏时状态点回到图标右上角
 
-## 架构
-
-```
-Web 设备 → xxx.nyat.app:端口 → SakuraFrp 节点 → frpc(本插件托管)
-                                              → 127.0.0.1:<gatePort> 网关
-                                                ├─ /natfrp/*  管理路由（需密码门 cookie）
-                                                ├─ 密码门（HMAC cookie / ?gate=）
-                                                └─ Host 围栏反代 + WS 透传
-                                                  → 127.0.0.1:<dshPort> DSH WebServer
-```
+---
 
 ## 功能清单
 
@@ -49,7 +100,24 @@ Web 设备 → xxx.nyat.app:端口 → SakuraFrp 节点 → frpc(本插件托管
   首次 HTML 导航自动补 `?token=`
 - **桌面/浏览器通吃**：外链在 Electron 里走宿主内置浏览器标签，浏览器里走新标签页
 
-## 安装
+`frpc 日志默认展开，并且每 2 秒刷新一次`，不用收起再展开才看到新内容。
+
+---
+
+## 架构
+
+```
+Web 设备 → xxx.nyat.app:端口 → SakuraFrp 节点 → frpc(本插件托管)
+                                              → 127.0.0.1:<gatePort> 网关
+                                                ├─ /natfrp/*  管理路由（需密码门 cookie）
+                                                ├─ 密码门（HMAC cookie / ?gate=）
+                                                └─ Host 围栏反代 + WS 透传
+                                                  → 127.0.0.1:<dshPort> DSH WebServer
+```
+
+---
+
+## 安装（详细）
 
 **方式 A：从 npm 装**（包已发布时）
 
@@ -60,7 +128,13 @@ dsh plugin --profile desktop add dsh-sakurafrp -w
 ```
 
 > 如果这条命令报 `404 / not found`，说明 npm 上暂时没有可用版本（同名包撤下后有
-> 24 小时冷却），改用下面的源码方式即可。
+> 24 小时冷却），改用下面的源码方式，或直接用 Release 里的预构建包。
+
+**方式 A2：从 Release tarball 装**（不走 npm，也不需要构建）
+
+```powershell
+dsh plugin --profile desktop add https://github.com/MentholTea/dsh-sakurafrp/releases/latest/download/dsh-sakurafrp.tgz -w
+```
 
 **方式 B：从源码装**（不依赖 npm）
 
@@ -82,44 +156,11 @@ dsh plugin --profile desktop install
 frpc 默认取 `~/.dsh/dsh-sakurafrp/frpc-standalone(.exe)`；旧版本放在
 `~/.dsh/bin/` 的会被继续沿用，不必重下。`frpc -V` 输出应含 `sakura`。
 
-## 配置（cordis.patch.yml → config）
+---
 
-| 键 | 默认 | 说明 |
-|---|---|---|
-| `enabled` | `false` | 插件启用（设置页可改，持久化到 state.json）。新装默认关闭，避免装完就把 DSH 挂上公网 |
-| `frpcPath` | `~/.dsh/dsh-sakurafrp/frpc-standalone(.exe)` | frpc 路径（旧 `~/.dsh/bin/` 下的也会被沿用） |
-| `tunnelId` | — | 隧道 ID（设置页下拉选择后持久化） |
-| `tokenFile` | — | 访问密钥文件（优先级最高；设置页写密钥即写此文件） |
-| `tokenRef` | `NATFRP_TOKEN` | tokenFile 为空时走 DSH credentials |
-| `gatePort` | — | 网关端口 = 隧道面板的「本地端口」。留空 = 未设置，网关不监听、frpc 不启动 |
-| `gateHost` | `127.0.0.1` | 网关监听地址。frpc 同机时无需对外监听；改成 `0.0.0.0` 会给局域网开一条绕过密码门的入口 |
-| `gatePassword` | — | 公网密码；也可用设置页写（落 `~/.dsh/dsh-sakurafrp/gate-password.txt`，**不写入 state.json**） |
-| `autoAlign` | `true` | 启动前自动把隧道「本地端口」改成 `gatePort` |
-| `maxLogLines` | `500` | 日志环形缓冲行数 |
+## 首次使用（完整说明）
 
-## 管理接口（需密码门 cookie）
-
-```
-GET  /natfrp/api/state     全量快照（frpc + 网关 + 隧道）
-GET  /natfrp/api/tunnels   隧道列表（含节点名）
-GET  /natfrp/api/nodes     免费节点（含负载 / 是否可新建；离线、付费已剔除）
-GET  /natfrp/api/port/check?port=N  端口可用性（available / reason）
-GET  /natfrp/api/user      账号信息
-GET  /natfrp/api/logs      frpc 日志
-POST /natfrp/api/start     启用并启动
-POST /natfrp/api/stop      停止
-POST /natfrp/api/align     把隧道「本地端口」改成插件正在用的端口
-POST /natfrp/api/tunnel/create  新建一条 TCP 隧道 {name,node,port}，本地端口指向插件
-POST /natfrp/api/config    更新配置 {enabled,tunnelId,gatePort,gatePassword,token,clearGatePassword}
-                            gatePort 传 null / '' = 清空端口（网关随之停止）
-```
-
-**鉴权边界**：`/natfrp/*` 只在持有密码门 cookie 时才放行，否则返回登录页 / 401。
-不能按来源地址判断「本机还是公网」——公网流量是 frpc 从 `127.0.0.1` 转发进来的，
-两者来源完全相同。本机设置页打的是 DSH webServer 上的同名路由，不经过网关，
-所以本机操作不需要密码。
-
-## 首次使用
+上面「第一步」是精简版。这里补上每一步的细节和判断依据。
 
 1. 重启 DSH 后，设置页出现「内网穿透 (SakuraFrp)」区块；若提示未装 frpc，先点「一键安装」
 2. **① 访问密钥**：这是唯一的必填项。点「获取密钥」→ 用户信息 → 查看访问密钥，粘贴进来，
@@ -150,6 +191,49 @@ POST /natfrp/api/config    更新配置 {enabled,tunnelId,gatePort,gatePassword,
 
 **frpc 日志默认展开，并且每 2 秒刷新一次**，不用收起再展开才看到新内容。
 
+---
+
+## 配置（cordis.patch.yml → config）
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 插件启用（设置页可改，持久化到 state.json）。新装默认关闭，避免装完就把 DSH 挂上公网 |
+| `frpcPath` | `~/.dsh/dsh-sakurafrp/frpc-standalone(.exe)` | frpc 路径（旧 `~/.dsh/bin/` 下的也会被沿用） |
+| `tunnelId` | — | 隧道 ID（设置页下拉选择后持久化） |
+| `tokenFile` | — | 访问密钥文件（优先级最高；设置页写密钥即写此文件） |
+| `tokenRef` | `NATFRP_TOKEN` | tokenFile 为空时走 DSH credentials |
+| `gatePort` | — | 网关端口 = 隧道面板的「本地端口」。留空 = 未设置，网关不监听、frpc 不启动 |
+| `gateHost` | `127.0.0.1` | 网关监听地址。frpc 同机时无需对外监听；改成 `0.0.0.0` 会给局域网开一条绕过密码门的入口 |
+| `gatePassword` | — | 公网密码；也可用设置页写（落 `~/.dsh/dsh-sakurafrp/gate-password.txt`，**不写入 state.json**） |
+| `autoAlign` | `true` | 启动前自动把隧道「本地端口」改成 `gatePort` |
+| `maxLogLines` | `500` | 日志环形缓冲行数 |
+
+---
+
+## 管理接口（需密码门 cookie）
+
+```
+GET  /natfrp/api/state     全量快照（frpc + 网关 + 隧道）
+GET  /natfrp/api/tunnels   隧道列表（含节点名）
+GET  /natfrp/api/nodes     免费节点（含负载 / 是否可新建；离线、付费已剔除）
+GET  /natfrp/api/port/check?port=N  端口可用性（available / reason）
+GET  /natfrp/api/user      账号信息
+GET  /natfrp/api/logs      frpc 日志
+POST /natfrp/api/start     启用并启动
+POST /natfrp/api/stop      停止
+POST /natfrp/api/align     把隧道「本地端口」改成插件正在用的端口
+POST /natfrp/api/tunnel/create  新建一条 TCP 隧道 {name,node,port}，本地端口指向插件
+POST /natfrp/api/config    更新配置 {enabled,tunnelId,gatePort,gatePassword,token,clearGatePassword}
+                            gatePort 传 null / '' = 清空端口（网关随之停止）
+```
+
+**鉴权边界**：`/natfrp/*` 只在持有密码门 cookie 时才放行，否则返回登录页 / 401。
+不能按来源地址判断「本机还是公网」——公网流量是 frpc 从 `127.0.0.1` 转发进来的，
+两者来源完全相同。本机设置页打的是 DSH webServer 上的同名路由，不经过网关，
+所以本机操作不需要密码。
+
+---
+
 ## 证书警告与白屏问题（重要）
 
 通过隧道默认域名（`xxx.nyat.app`）HTTPS 访问时，浏览器会提示证书不受信任；
@@ -165,6 +249,8 @@ POST /natfrp/api/config    更新配置 {enabled,tunnelId,gatePort,gatePassword,
 「不**绑定证书 ↗** 会出现证书警告、白屏等；绑定子域名后即可消除。 **绑定教程 ↗**」
 「绑定证书」指向子域绑定页，「绑定教程」指向官方文档。
 （「不」不带链接——连成一片蓝色会读成「不去绑定证书」，意思正好反了。）
+
+---
 
 ## 验证
 
@@ -220,8 +306,10 @@ $env:PREVIEW_VARIANT='fresh'; node preview-render.mjs .preview/fresh.html
 追加真实 API 冒烟（只读端点，会消耗一次 API 调用）：
 
 ```powershell
-$env:NATFRP_TOKEN='你的密钥'; node verify.mjs
+$env:NATFRP_TOKEN='你的密钥'; node test/verify.mjs
 ```
+
+---
 
 ## 已知边界
 
@@ -241,6 +329,8 @@ $env:NATFRP_TOKEN='你的密钥'; node verify.mjs
   界面内的按钮、提示、错误文案不走 i18n，英文环境看到的仍是中文
 - 免费档：2 隧道 / 20 GB 每月 / 10 Mbps
 - API 写操作（edit/delete/create）走官方 OpenAPI，但官方对滥用有风控，别高频调用
+
+---
 
 ## License
 
