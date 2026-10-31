@@ -366,11 +366,30 @@ export function createGateServer({
   }
   const authority = () => `${upstream.host}:${upstreamPort()}`
 
+  /**
+   * 请求是否已持有 DSH 自己的浏览器会话 cookie。
+   *
+   * DSH 的 cookie 名 = `dsh-auth-<base64url(sha256(authority))>`
+   * （dsh-client-connection: COOKIE_PREFIX = 'dsh-auth-'，后缀是定长 43 字符的 base64url）。
+   * 这里只认两种形态：
+   *   · dsh-auth-<43 字符 base64url>=     ← 实际形态
+   *   · dsh-auth=                          ← 兼容裸名
+   * 必须用完整形态匹配，否则 `dsh-auth-old=1`、`mydsh-auth=2` 这类同前缀的
+   * 无关 cookie 会被误判成「已认证」，导致本该补 token 的首次访问拿不到 token。
+   */
+  const DSH_AUTH_COOKIE_RE = /(?:^|;\s*)dsh-auth(?:-[A-Za-z0-9_-]{43})?=/
+
+  function hasDshAuthCookie(cookieHeader) {
+    return DSH_AUTH_COOKIE_RE.test(String(cookieHeader ?? ''))
+  }
+
   function withLaunchToken(reqUrl, cookieHeader) {
     const token = String(launchToken?.() ?? '')
     if (!token) return reqUrl
-    // 只认完整的 cookie 名，避免 `dsh-auth-old=...` 这类前缀相同的 cookie 误命中
-    if (/(?:^|;\s*)dsh-auth=/.test(String(cookieHeader ?? ''))) return reqUrl
+    // 已持有 DSH 会话 cookie：不要再塞 token。
+    // DSH 的 authorizeIndex 见到 ?token= 会先尝试「token 换 cookie」，
+    // 已经换过的人再被塞一次 token，就会多绕一轮 303。
+    if (hasDshAuthCookie(cookieHeader)) return reqUrl
     try {
       const u = new URL(reqUrl, 'http://127.0.0.1')
       if (u.searchParams.has('token')) return reqUrl

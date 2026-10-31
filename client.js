@@ -1161,6 +1161,12 @@ window.__ModuleLoader__.load({
             title: '关闭后立即断开公网连接，DSH 重启也不再连；本机端口与密码设置都会保留。',
           },
             h('div', { style: S.label }, '内网穿透'),
+            st.version
+              ? h('span', {
+                style: { ...S.hint, marginTop: 0, fontSize: '11px', opacity: 0.65 },
+                title: `dsh-sakurafrp ${st.version}`,
+              }, `v${st.version}`)
+              : null,
             h('span', { style: S.badge(frpc.running) },
               frpc.running ? `frpc 运行中${frpc.pid ? ` ${frpc.pid}` : ''}` : 'frpc 已停止'),
             h('span', { style: S.badge(st.gateRunning) },
@@ -1196,7 +1202,9 @@ window.__ModuleLoader__.load({
         // ── 公网地址 / 账号 / 流量：三行压成两行 ──
         //   第一行：公网地址 …… 今日已用 · 剩余（靠右）
         //   第二行：账号名 | 流量条 | 百分比
-        frpc.tunnelUrl || user
+        // tunnelUrl 由 frpc 日志里的「使用 >> host <<」解析而来，frpc 刚起来那几秒
+        // 还没打印，此时不能整行消失（用户会以为功能没做），而是显示「正在获取」。
+        frpc.running || frpc.tunnelUrl || user
           ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
             frpc.tunnelUrl
               ? h('span', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 } },
@@ -1205,7 +1213,14 @@ window.__ModuleLoader__.load({
                   href: frpc.tunnelUrl.includes('://') ? frpc.tunnelUrl : `https://${frpc.tunnelUrl}`,
                   style: { fontSize: '12px' },
                 }, frpc.tunnelUrl))
-              : null,
+              : frpc.running
+                ? h('span', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                  h('span', { style: { ...S.hint, marginTop: 0 } }, '公网地址'),
+                  h('span', {
+                    style: { fontSize: '12px', color: '#8b93a7', fontStyle: 'italic' },
+                    title: 'frpc 已启动，正在等它打印隧道地址；通常需要几秒',
+                  }, '正在获取…'))
+                : null,
             user
               ? h('span', { style: { ...S.hint, marginTop: 0, marginLeft: 'auto' } },
                 `今日已用 ${fmtBytes(todayUsed)} · 剩余 ${fmtBytes(remaining)}`)

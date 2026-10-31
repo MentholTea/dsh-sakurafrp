@@ -129,5 +129,19 @@ rec('自动检测只在有隧道时跑', /if \(!st\?\.tokenConfigured \|\| !st\?
 rec('新建表单展开时改选隧道会自动收起',
   /if \(newOpen\) \{ setNewOpen\(false\); setCreateErr\(''\) \}[\s\S]{0,120}?apply\(\{ tunnelId: e\.target\.value \}\)/.test(client))
 
+// ── 13) 版本号显示（2.2.0 新增） ──
+rec('服务端在快照里带 version', /\n      version: PLUGIN_VERSION,/.test(index))
+rec('版本号从 package.json 现读，不硬编码',
+  /readFileSync\(join\(here, 'package\.json'\), 'utf8'\)\)\.version/.test(index))
+rec('读不到版本号时退回 0.0.0 而不是崩',
+  /return String\(JSON\.parse\(readFileSync\(join\(here, 'package\.json'\), 'utf8'\)\)\.version \?\? '0\.0\.0'\)[\s\S]{0,80}?catch \{[\s\S]{0,40}?'0\.0\.0'/.test(index))
+rec('前端标题旁渲染 v<版本>', /`v\$\{st\.version\}`/.test(client))
+
+// ── 14) 公网地址「正在获取」态（2.2.0 新增） ──
+// tunnelUrl 来自 frpc 日志解析，刚启动那几秒还是空的；此时不能整行消失
+rec('公网地址未就绪时显示「正在获取」', /正在获取…/.test(client))
+rec('「正在获取」只在 frpc 运行时出现', /frpc\.running\s*\?\s*h\('span'/.test(client))
+rec('已有 tunnelUrl 时仍显示真实地址', /href: frpc\.tunnelUrl\.includes\(':\/\/'\)/.test(client))
+
 console.log(`\n${pass}/${pass + fail} passed`)
 setTimeout(() => process.exit(fail === 0 ? 0 : 1), 200)

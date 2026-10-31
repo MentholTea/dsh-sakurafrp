@@ -76,7 +76,11 @@ const UPSTREAM = await new Promise((resolve) => {
       res.end('fence: forbidden host ' + host)
       return
     }
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    // x-seen-url 回显上游实际收到的 req.url，供断言「launch token 是否被注入」
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'x-seen-url': req.url ?? '',
+    })
     res.end('<!doctype html><html><head><title>FAKE-DSH</title></head><body>ok</body></html>')
   })
   // 假上游的 WS：回 101 并回显
@@ -186,6 +190,43 @@ let cookie = ''
     headers: { host: FAKE_HOST, accept: 'text/html', cookie } })
   // 假上游不校验 token，但改写正确性已由 3.6 证明；这里只验证不会因为 token 注入破坏请求
   record('网关: token 注入不破坏请求', r.status === 200)
+  // 没有 dsh-auth-* 会话时，应当补上 ?token=
+  record('网关: 无会话时补 ?token=', /[?&]token=/.test(String(r.headers['x-seen-url'] ?? '')),
+    `seen=${r.headers['x-seen-url']}`)
+}
+
+// 3.7b ⚠️ 回归 #重定向循环：已持有 DSH 会话 cookie 时不得再补 ?token=
+//
+// DSH 的会话 cookie 名是 `dsh-auth-<sha256(authority) 的 base64url>`（COOKIE_PREFIX='dsh-auth-'）。
+// 旧代码判断 `/(?:^|;\s*)dsh-auth=/`，带等号的前缀永远匹配不到 `dsh-auth-xxx=`，
+// 于是每轮都往 URL 补一次 ?token= → DSH 每次回 303 Location: ./ → 浏览器报
+// 「重定向你太多次」。清 Cookie 无效，因为 cookie 本身是好的，只是判断看不见它。
+{
+  // DSH 实际 cookie 名形如 dsh-auth-VOnL-15rFsUiCnRoyGFksKvWKcwNBRz5iarRem0Ilvo
+  // （base64url(sha256(authority))，定长 43 字符）
+  const hash43 = 'VOnL-15rFsUiCnRoyGFksKvWKcwNBRz5iarRem0Ilvo'
+  const authCookie = `${cookie}; dsh-auth-${hash43}=deadbeef`
+  const r = await http({ host: '127.0.0.1', port: GATE_PORT, path: '/', method: 'GET',
+    headers: { host: FAKE_HOST, accept: 'text/html', cookie: authCookie } })
+  const seen = String(r.headers['x-seen-url'] ?? '')
+  record('网关: 已有 dsh-auth-<hash> 时不再补 token', !/[?&]token=/.test(seen), `seen=${seen}`)
+  record('网关: 已有会话时仍正常转发', r.status === 200, `status=${r.status}`)
+}
+
+// 3.7c 裸 dsh-auth=（无 hash 后缀）同样视为已认证，避免另一种写法复发
+{
+  const r = await http({ host: '127.0.0.1', port: GATE_PORT, path: '/', method: 'GET',
+    headers: { host: FAKE_HOST, accept: 'text/html', cookie: `${cookie}; dsh-auth=plain` } })
+  const seen = String(r.headers['x-seen-url'] ?? '')
+  record('网关: 裸 dsh-auth= 也不补 token', !/[?&]token=/.test(seen), `seen=${seen}`)
+}
+
+// 3.7d 形似但不相干的 cookie 不能被误判成已认证
+{
+  const r = await http({ host: '127.0.0.1', port: GATE_PORT, path: '/', method: 'GET',
+    headers: { host: FAKE_HOST, accept: 'text/html', cookie: `${cookie}; dsh-auth-old=1; mydsh-auth=2` } })
+  const seen = String(r.headers['x-seen-url'] ?? '')
+  record('网关: 相似 cookie 不误判 → 仍补 token', /[?&]token=/.test(seen), `seen=${seen}`)
 }
 
 // 3.8 对照：直连假 DSH + 外部 Host → 403

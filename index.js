@@ -12,6 +12,7 @@
 import { createServer } from 'node:http'
 import { readFileSync, mkdirSync, writeFileSync, rmSync, existsSync, rmdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { createClient, ApiError } from './natfrp.mjs'
 import { createFrpcManager } from './frpc.mjs'
@@ -21,6 +22,22 @@ import { resolveDshHome, resolveFrpcPath, displayPath } from './paths.mjs'
 
 export const name = 'natfrp'
 export const inject = ['credentials', 'webServer', 'timer', 'connection']
+
+/**
+ * 插件自身版本号，显示在设置页/侧边栏标题旁。
+ *
+ * 从同目录 package.json 现读，而不是把版本号硬编码进来：
+ * 硬编码会在每次发版时被漏改（这个仓库已经踩过一次——natfrp.mjs 里的
+ * User-Agent 就写死过版本）。读失败也不能让插件挂掉，退回 '0.0.0'。
+ */
+const PLUGIN_VERSION = (() => {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url))
+    return String(JSON.parse(readFileSync(join(here, 'package.json'), 'utf8')).version ?? '0.0.0')
+  } catch {
+    return '0.0.0'
+  }
+})()
 
 // ⚠️ 同样不能直接用 process.env.DSH_HOME：空白串会让 join 出相对路径，
 //    状态文件就落到当前工作目录里了。统一走 resolveDshHome。
@@ -734,6 +751,7 @@ export function apply(ctx, config = {}) {
     const apiErrorView = frpcSnap.tunnelOk ? '' : lastApiError
     const apiOk = Boolean(token) && !apiErrorView
     return {
+      version: PLUGIN_VERSION,
       enabled,
       tunnelId,
       gatePort: actualGatePort ?? gatePort,
