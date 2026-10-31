@@ -678,6 +678,38 @@ window.__ModuleLoader__.load({
      */
     const PREVIEW_CREATE = typeof window !== 'undefined' && window.__natfrpPreviewCreate === true
 
+    // ── 日志展开状态的持久化 ──
+    //
+    // 为什么要持久化：设置页切到别的页面再切回来，React 组件会被卸载重建，
+    // useState 的初始值会重新生效。用户刚把日志收起来，一回来又弹开，
+    // 看着像「关闭不生效」。这是纯前端 UI 偏好，放 localStorage 就够，
+    // 不必写服务端 state.json（那会多一次 IO，还得处理并发轮询覆盖）。
+    //
+    // 读失败一律退回 true（默认展开）：很多问题只有日志里有答案，
+    // 隐私模式 / 存储被禁时不能因此让日志消失。
+    const LOGS_OPEN_KEY = 'dsh-sakurafrp:logsOpen'
+
+    function readLogsOpenPref() {
+      try {
+        if (typeof window === 'undefined' || !window.localStorage) return true
+        const v = window.localStorage.getItem(LOGS_OPEN_KEY)
+        if (v === '0') return false
+        if (v === '1') return true
+        return true // 没存过 → 默认展开
+      } catch {
+        return true // 存储被禁（隐私模式等）→ 默认展开
+      }
+    }
+
+    function writeLogsOpenPref(open) {
+      try {
+        if (typeof window === 'undefined' || !window.localStorage) return
+        window.localStorage.setItem(LOGS_OPEN_KEY, open ? '1' : '0')
+      } catch {
+        // 写不进去就算了：只是下次挂载会回到默认展开，不影响功能
+      }
+    }
+
     function Panel() {
       const [st, setSt] = useState(null)
       const [user, setUser] = useState(null)
@@ -696,7 +728,12 @@ window.__ModuleLoader__.load({
       const [token, setToken] = useState('')
       // 日志默认展开：很多问题（连不上、端口被抢）只有日志里有答案，
       // 藏起来等于让用户先猜一次。展开状态由下面 2s 一次的轮询保持最新。
-      const [logsOpen, setLogsOpen] = useState(true)
+      //
+      // ⚠️ 展开状态必须记住用户的选择，不能每次挂载都回默认值：
+      //    设置页切走再切回来，组件会被卸载重建，useState(true) 会把
+      //    用户刚收起的日志又弹开 —— 表现为「关了又自己恢复」。
+      //    存在 localStorage 里（纯 UI 偏好，不必占服务端 state.json）。
+      const [logsOpen, setLogsOpen] = useState(readLogsOpenPref)
       const [logs, setLogs] = useState('')
       // 「新建隧道」表单：默认收起，展开时才去拉节点列表（省一次 API 调用）
       const [newOpen, setNewOpen] = useState(PREVIEW_CREATE)
@@ -1606,7 +1643,13 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button',
               style: { ...S.btnGhost, padding: '3px 10px', fontSize: '12px' },
-              onClick: () => setLogsOpen((v) => !v),
+              // 切换时同步落盘：切走页面再回来（组件重挂）要沿用这次的选择，
+              // 不能又被 useState 的初始值弹回展开。
+              onClick: () => setLogsOpen((v) => {
+                const next = !v
+                writeLogsOpenPref(next)
+                return next
+              }),
             },
               logsOpen ? '收起日志' : '展开 frpc 日志'),
             logsOpen

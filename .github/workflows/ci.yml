@@ -1,0 +1,59 @@
+name: CI
+
+# 什么时候跑：
+#   - 推送到 master 或 develop
+#   - 向 master / develop 提 PR
+# 目的：挡坏代码，不让它进 develop 和 master。
+# 真正发布走 tag，见 release.yml。
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+  pull_request:
+    branches:
+      - master
+      - develop
+
+# 同一分支的新推送会取消还在跑的旧任务。
+# 好处：连续提交时不会积压一堆过期的 CI，省时间也省额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test / ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # 一个组合失败时，其余组合继续跑完。
+      # 这样你能一次看到「是 Linux 挂还是 Windows 挂、还是都挂」。
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+        node:
+          - '22'
+          - '24'
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 安装 Node ${{ matrix.node }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 显示环境
+        run: |
+          node -v
+          npm -v
+
+      # 本项目零运行时依赖、零开发依赖，不需要 npm ci / npm install。
+      # 直接跑测试即可。
+      - name: 跑全部离线测试
+        run: npm test

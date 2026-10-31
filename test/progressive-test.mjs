@@ -105,11 +105,14 @@ rec('「绑定教程」挪到域名提示句末',
   /消除。', ' ',\n\s+h\(ExternalLink, \{\n\s+href: 'https:\/\/doc\.natfrp\.com\/bestpractice\/domain-bind\.html'/.test(client))
 rec('标题栏不再有外链', !/h\(div, \{ style: S\.label \}, '连接设置'\),\n\s+h\(div, \{\n\s+style: \{ display: 'flex', gap: '12px'/.test(client))
 
-// ── 9) 日志：默认展开 + 实时刷新 ──
-rec('日志默认展开', /const \[logsOpen, setLogsOpen\] = useState\(true\)/.test(client))
+// ── 9) 日志：默认展开 + 实时刷新 + 记住用户选择 ──
+rec('日志默认展开', /const \[logsOpen, setLogsOpen\] = useState\(readLogsOpenPref\)/.test(client))
 rec('日志展开时定时拉取', /const t = setInterval\(\(\) => void pullLogs\(\), 2000\)/.test(client))
 rec('收起后停掉定时器', /if \(!logsOpen\) return undefined/.test(client))
-rec('展开/收起只切状态，不再单次拉取', /onClick: \(\) => setLogsOpen\(\(v\) => !v\)/.test(client))
+rec('展开/收起切换时落盘偏好', /writeLogsOpenPref\(next\)/.test(client))
+rec('读取偏好：没存过时默认展开', /function readLogsOpenPref\(\)[\s\S]*?return true \/\/ 没存过/.test(client))
+rec('存储被禁时也退回展开（隐私模式不能让日志消失）', /catch \{\n\s+return true \/\/ 存储被禁/.test(client))
+rec('切换后返回新值给 setState', /const next = !v\n\s+writeLogsOpenPref\(next\)\n\s+return next/.test(client))
 rec('旧的 loadLogs 已移除', !client.includes('const loadLogs ='))
 rec('日志限高（默认展开才不会把面板撑爆）', /maxHeight: '220px', overflowY: 'auto'/.test(client))
 rec('新日志自动滚到底', /if \(el && logPinned\.current\) el\.scrollTop = el\.scrollHeight/.test(client))
