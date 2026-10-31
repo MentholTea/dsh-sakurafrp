@@ -130,4 +130,4 @@ rec('新建表单展开时改选隧道会自动收起',
   /if \(newOpen\) \{ setNewOpen\(false\); setCreateErr\(''\) \}[\s\S]{0,120}?apply\(\{ tunnelId: e\.target\.value \}\)/.test(client))
 
 console.log(`\n${pass}/${pass + fail} passed`)
-process.exit(fail === 0 ? 0 : 1)
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 200)

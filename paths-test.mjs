@@ -216,4 +216,4 @@ rec('非字符串原样', expandTilde(null) === null)
 
 const ok = results.every(Boolean)
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`)
-process.exit(ok ? 0 : 1)
+setTimeout(() => process.exit(ok ? 0 : 1), 200)

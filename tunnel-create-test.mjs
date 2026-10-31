@@ -275,4 +275,4 @@ const passed = results.filter(Boolean).length
 console.log(`\n${passed}/${results.length} passed`)
 await new Promise((r) => srv.close(r))
 await new Promise((r) => upstream.close(r))
-process.exit(passed === results.length ? 0 : 1)
+setTimeout(() => process.exit(passed === results.length ? 0 : 1), 200)

@@ -137,4 +137,4 @@ rec('隧道区不再有「刷新列表」按钮', !/刷新列表/.test(client))
 
 const passed = results.filter(Boolean).length
 console.log(`\n${passed}/${results.length} passed`)
-process.exit(passed === results.length ? 0 : 1)
+setTimeout(() => process.exit(passed === results.length ? 0 : 1), 200)

@@ -59,6 +59,15 @@ function migrateLegacyDataDir() {
 }
 migrateLegacyDataDir()
 
+/**
+ * 是否属于本插件的管理路由。
+ * 用「/natfrp 或 /natfrp/...」精确匹配，避免 /natfrpfoo 之类被误当成管理路由
+ * （网关与 handleOwnRoutes 必须用同一套判定，否则会出现"一边拦一边放"）。
+ */
+function isAdminPath(u) {
+  return /^\/natfrp(?:[/?#]|$)/.test(String(u ?? ''))
+}
+
 function safeRead(p) {
   if (!p) return ''
   try { return readFileSync(p, 'utf8').trim() } catch { return '' }
@@ -80,6 +89,10 @@ function writeState(patch, remove = []) {
     mkdirSync(dirname(STATE_PATH), { recursive: true })
     const merged = { ...readState(), ...patch }
     for (const k of remove) delete merged[k]
+    // 不变量：访问密码永不落 state.json。
+    // 这个文件常被备份 / 同步 / 其它插件读取，而旧版本确实往里写过明文；
+    // 这里兜底删掉，避免任何调用点把它带回来（迁移逻辑见下面 gatePassword 初始化处）。
+    delete merged.gatePassword
     writeFileSync(STATE_PATH, JSON.stringify(merged, null, 2), { mode: 0o600 })
     return merged
   } catch {
@@ -89,9 +102,19 @@ function writeState(patch, remove = []) {
 
 export function apply(ctx, config = {}) {
   const logger = ctx.logger?.(name) ?? console
-  const logInfo = (...a) => (logger.info ?? logger.log).call(logger, ...a)
-  const logWarn = (...a) => logger.warn(...a)
-  const logError = (...a) => logger.error(...a)
+  /**
+   * 宿主/测试的 logger 不一定三个方法都齐（有的只给 log）。
+   * 直接 logger.warn(...) 在缺方法时会抛 TypeError，把「记一条日志」变成一次崩溃。
+   */
+  const emit = (levels, a) => {
+    for (const lv of levels) {
+      const fn = logger?.[lv]
+      if (typeof fn === 'function') { fn.apply(logger, a); return }
+    }
+  }
+  const logInfo = (...a) => emit(['info', 'log'], a)
+  const logWarn = (...a) => emit(['warn', 'info', 'log'], a)
+  const logError = (...a) => emit(['error', 'warn', 'log'], a)
 
   // ---------- 配置与状态 ----------
 
@@ -202,8 +225,34 @@ export function apply(ctx, config = {}) {
     }
     return successAckAt
   }
-  // 兼容旧版：早期把密码写进了 state.json，这里仍优先读它；新版不再写入。
-  let gatePassword = String(state.gatePassword ?? '') || safeRead(PASSWORD_FILE) || String(config.gatePassword ?? '')
+  /**
+   * 用户是否「主动清空过」访问密码。
+   *
+   * 为什么需要这个墓碑：config.gatePassword 是配置里的初始值，如果用户后来在设置页
+   * 把密码清掉了，重启时这条配置又会把密码"复活"——用户看到的是"我明明删了它又回来了"。
+   * 有墓碑在，清空就是清空；重新设密码时再把墓碑撤掉。
+   */
+  let gatePasswordCleared = state.gatePasswordCleared === true
+  let gatePassword = safeRead(PASSWORD_FILE)
+    || String(state.gatePassword ?? '')
+    || (gatePasswordCleared ? '' : String(config.gatePassword ?? ''))
+
+  /**
+   * 旧版遗留的明文密码：先迁到 0600 的密码文件，再从 state.json 里抹掉。
+   *
+   * 只读不删的话，这个密码会永远躺在 state.json 里 —— 用户以为"插件说密码不写
+   * state.json"，实际那份备份 / 同步 / 其它插件读到的还是明文。
+   * 密码文件已存在时不覆盖：以磁盘上的为准（用户可能已经改过）。
+   */
+  if (Object.prototype.hasOwnProperty.call(state, 'gatePassword')) {
+    try {
+      if (gatePassword && !existsSync(PASSWORD_FILE)) {
+        mkdirSync(DATA_DIR, { recursive: true })
+        writeFileSync(PASSWORD_FILE, gatePassword, { mode: 0o600 })
+      }
+    } catch { /* 写不了就只做清理：内存里的密码本次仍然可用 */ }
+    writeState({}, ['gatePassword'])
+  }
 
   /**
    * DSH WebServer 端口。
@@ -298,6 +347,15 @@ export function apply(ctx, config = {}) {
   }
 
   /**
+   * 记一次「API 确实通了」，把上一次的失败抹掉。
+   *
+   * ⚠️ lastApiError 只写不清的话，开机时一次瞬时失败（网络还没起来、
+   *    官方接口抽风）就会让侧边栏状态点永久变红 —— 隧道明明已经上线、
+   *    面板数据也在正常刷新，用户看到的却是"故障"。所以成功就自愈。
+   */
+  function noteApiOk() { lastApiError = '' }
+
+  /**
    * 让隧道连到插件正在监听的端口。
    *
    * 面板里那条隧道有个「本地端口」，frpc 会把公网流量转到这里。
@@ -310,6 +368,7 @@ export function apply(ctx, config = {}) {
     if (!gatePort) return { skipped: true, reason: '本机端口还没填' }
     try {
       const list = await api.tunnels()
+      noteApiOk()
       const tn = Array.isArray(list) ? list.find((t) => String(t.id) === tunnelId) : null
       if (!tn) return { skipped: true, reason: `面板上没有隧道 ${tunnelId}` }
       lastTunnelInfo = tn
@@ -330,36 +389,49 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * 启动流程。
+   *
+   * ⚠️ 所有调用点都是 `void startAll(...)`（不能阻塞请求），所以这里必须自己
+   *    兜住所有异常：任何漏出去的 reject 都是"未处理的 Promise 拒绝"，
+   *    Node 15+ 默认直接终止进程 —— 一次启动失败会把整个 DSH 带走。
+   */
   async function startAll(reason = '') {
-    if (!enabled) return
-    if (!gatePort) {
-      // 没端口就没有网关，frpc 连上来也是 502 —— 不如不启动，并说清缺什么
-      logWarn('natfrp: 本机端口未设置，先填端口再开启')
-      frpc.note('未启动：本机端口未设置')
-      return
-    }
-    const token = await resolveToken()
-    if (!token) {
-      logError(`natfrp: 访问密钥为空（tokenFile=${cfg.tokenFile || '未配置'}, tokenRef=${cfg.tokenRef}）`)
-      return
-    }
-    if (!tunnelId) {
-      logError('natfrp: 未配置隧道 ID')
-      return
-    }
-    const api = apiOrNull(token)
-    if (api) {
-      const report = await autoAlign(api)
-      if (report.error) logWarn(`natfrp: 隧道端口检查失败: ${JSON.stringify(report)}`)
-      frpc.note(`隧道端口: ${JSON.stringify(report)}`)
-    }
-    const r = frpc.start({ tunnelIds: [tunnelId] })
-    if (!r.ok) {
-      logWarn(`natfrp: frpc 启动失败: ${r.reason}${r.detail ? ` (${r.detail})` : ''}`)
-      frpc.note(`frpc 启动失败: ${r.reason}`)
-    } else {
-      logInfo(`natfrp: frpc 已启动 (pid=${r.pid}${reason ? `, ${reason}` : ''})`)
-      frpc.note(`frpc 已启动 (pid=${r.pid}${reason ? `, ${reason}` : ''})`)
+    try {
+      if (!enabled) return
+      if (!gatePort) {
+        // 没端口就没有网关，frpc 连上来也是 502 —— 不如不启动，并说清缺什么
+        logWarn('natfrp: 本机端口未设置，先填端口再开启')
+        frpc.note('未启动：本机端口未设置')
+        return
+      }
+      const token = await resolveToken()
+      if (!token) {
+        logError(`natfrp: 访问密钥为空（tokenFile=${cfg.tokenFile || '未配置'}, tokenRef=${cfg.tokenRef}）`)
+        return
+      }
+      if (!tunnelId) {
+        logError('natfrp: 未配置隧道 ID')
+        return
+      }
+      const api = apiOrNull(token)
+      if (api) {
+        const report = await autoAlign(api)
+        if (report.error) logWarn(`natfrp: 隧道端口检查失败: ${JSON.stringify(report)}`)
+        frpc.note(`隧道端口: ${JSON.stringify(report)}`)
+      }
+      const r = frpc.start({ tunnelIds: [tunnelId] })
+      if (!r.ok) {
+        logWarn(`natfrp: frpc 启动失败: ${r.reason}${r.detail ? ` (${r.detail})` : ''}`)
+        frpc.note(`frpc 启动失败: ${r.reason}`)
+      } else {
+        logInfo(`natfrp: frpc 已启动 (pid=${r.pid}${reason ? `, ${reason}` : ''})`)
+        frpc.note(`frpc 已启动 (pid=${r.pid}${reason ? `, ${reason}` : ''})`)
+      }
+    } catch (e) {
+      const msg = String(e?.message ?? e)
+      logError(`natfrp: 启动流程异常: ${msg}`)
+      frpc.note(`启动流程异常: ${msg}`)
     }
   }
 
@@ -392,22 +464,24 @@ export function apply(ctx, config = {}) {
         }
       },
       onRequest: async (req, res, opts = {}) => {
-        const isLocal = (() => {
-          const ip = String(req.socket?.remoteAddress ?? '')
-          return ip.includes('127.0.0.1') || ip.includes('::1') || ip === '::ffff:127.0.0.1'
-        })()
         const path = String(req.url ?? '')
-        if (path.startsWith('/natfrp')) {
-          // 管理路由：仅本机 HTTP；WS 升级一律销毁
+        if (isAdminPath(path)) {
+          // 管理路由：WS 升级一律销毁
           if (opts.upgrade) {
             try { res?.destroy?.() } catch { /* noop */ }
             return true
           }
-          if (!isLocal) {
-            res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
-            res.end('forbidden')
-            return true
-          }
+          /**
+           * ⚠️ 绝不能用 remoteAddress 判断「是不是本机」。
+           *   公网流量是 frpc 从 127.0.0.1 转发进来的，公网访客与本机浏览器的
+           *   来源地址完全一样 —— 按来源放行等于把 /natfrp/api/config 敞开给
+           *   整个互联网（对方可以先改掉访问密码，再登录拿到完整 DSH）。
+           *   唯一的身份凭据只有密码门 cookie；没有就走 gate.handle（登录页 / 401）。
+           *
+           *   本机设置页不受影响：它打的是 DSH webServer 上的 /natfrp 路由
+           *   （见文件末尾 webServer.register），根本不经过这个网关。
+           */
+          if (!gate.checkCookie(req)) return gate.handle(req, res)
           return handleOwnRoutes(req, res)
         }
         // DSH 还没监听（或端口未知）时明确报错，而不是转到 0 端口拿一个看不懂的 502
@@ -422,8 +496,7 @@ export function apply(ctx, config = {}) {
         }
         if (opts.upgrade) {
           // WS：gate.handle 假设 res 是 ServerResponse，对升级请求不适用。
-          // 本机放行；公网需持有密码门 cookie，否则在握手层 401。
-          if (isLocal) return false
+          // 一律要求密码门 cookie —— 来源地址同样不可信（见上面的说明）。
           if (!gate.checkWs(req)) {
             try {
               res.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
@@ -529,6 +602,7 @@ export function apply(ctx, config = {}) {
     if (!api || !tunnelId) return { skipped: true }
     try {
       const list = await api.tunnels()
+      noteApiOk()
       const tn = Array.isArray(list) ? list.find((t) => String(t.id) === tunnelId) : null
       if (!tn) return { skipped: true, reason: `面板上没有隧道 ${tunnelId}` }
       lastTunnelInfo = tn
@@ -647,9 +721,18 @@ export function apply(ctx, config = {}) {
 
   async function snapshot(originBase = '') {
     const token = tokenNow()
-    // 有 token 且上次 API 调用没报错，才算「接口可用」——
-    // 只判 Boolean(token) 是名不副实，密钥填错时仍然显示可用。
-    const apiOk = Boolean(token) && !lastApiError
+    const frpcSnap = frpc.snapshot()
+    /**
+     * 有 token 且上次 API 调用没报错，才算「接口可用」——
+     * 只判 Boolean(token) 是名不副实，密钥填错时仍然显示可用。
+     *
+     * ⚠️ 但隧道已上线时，必须无视 lastApiError：
+     *    frpc 能用同一个 token 连上节点，就证明凭据一定有效；这时还挂着
+     *    开机时那一次网络抖动留下的失败，只会让侧边栏状态点在恢复后
+     *    永久变红，用户以为坏了，其实一切正常。
+     */
+    const apiErrorView = frpcSnap.tunnelOk ? '' : lastApiError
+    const apiOk = Boolean(token) && !apiErrorView
     return {
       enabled,
       tunnelId,
@@ -657,13 +740,15 @@ export function apply(ctx, config = {}) {
       gateRunning: Boolean(gateServer?.listening),
       gatePasswordConfigured: Boolean(gatePassword),
       tokenConfigured: Boolean(token),
-      tokenFile: cfg.tokenFile,
+      // 与 frpcPath 同口径脱敏：默认 home 下显示 ~/.dsh/...，避免快照里出现
+      // C:\Users\某某 这类含用户名的串（快照会经网关返回给已登录的公网访客）
+      tokenFile: displayPath(cfg.tokenFile, frpcResolved.home),
       autoAlign: cfg.autoAlign,
       dshPort: dshPortNow(),
-      frpc: frpc.snapshot(),
+      frpc: frpcSnap,
       tunnelInfo: lastTunnelInfo,
       apiOk,
-      apiError: lastApiError || undefined,
+      apiError: apiErrorView || undefined,
       // 绝对化的日志地址：桌面端内置浏览器/外部浏览器都无法解析相对路径，
       // 客户端拿不到 webServer 服务，所以必须由服务端按实际请求来源拼出来。
       logsUrl: `${originBase}/natfrp/api/logs`,
@@ -699,66 +784,66 @@ export function apply(ctx, config = {}) {
     return 'ok'
   }
 
-/**
- * 把底层写文件错误翻译成用户能照做的提示。
- *
- * 典型场景（真实遇到过）：文件是管理员创建的，普通用户只有读权限，
- * writeFileSync 抛 EPERM。原始信息是
- *   "EPERM: operation not permitted, open '<tokenFile>'"
- * 用户看到完全不知道该怎么办。
- */
-function diagnoseWriteFailure(path, err) {
-  const code = err?.code ?? ''
-  const dir = dirname(path)
-  const base = { path, dir, code }
+  /**
+   * 把底层写文件错误翻译成用户能照做的提示。
+   *
+   * 典型场景（真实遇到过）：文件是管理员创建的，普通用户只有读权限，
+   * writeFileSync 抛 EPERM。原始信息是
+   *   "EPERM: operation not permitted, open '<tokenFile>'"
+   * 用户看到完全不知道该怎么办。
+   */
+  function diagnoseWriteFailure(path, err) {
+    const code = err?.code ?? ''
+    const dir = dirname(path)
+    const base = { path, dir, code }
 
-  if (code === 'EPERM' || code === 'EACCES') {
-    // 进一步区分：目录可写吗？文件属主是谁？
-    let ownerNote = ''
-    try {
-      const st = statSync(path)
-      ownerNote = `（当前文件属主可能不是你的账号，属主 UID ${st.uid}）`
-    } catch { /* 拿不到就算了 */ }
+    if (code === 'EPERM' || code === 'EACCES') {
+      // 进一步区分：目录可写吗？文件属主是谁？
+      let ownerNote = ''
+      try {
+        const st = statSync(path)
+        ownerNote = `（当前文件属主可能不是你的账号，属主 UID ${st.uid}）`
+      } catch { /* 拿不到就算了 */ }
+
+      return {
+        ...base,
+        message: `没有写入权限：${path}`,
+        hint:
+          `该文件可能是管理员创建的，普通账号只能读。解决办法（任选其一）：\n` +
+          `① 以管理员身份运行 PowerShell，执行：\n` +
+          `   takeown /f "${path}"\n` +
+          `   icacls "${path}" /grant "%USERNAME%:F"\n` +
+          `② 或者直接删除它，让插件重新创建（会用你的账号，权限自然正确）：\n` +
+          `   Remove-Item "${path}" -Force\n` +
+          `③ 或在 cordis.patch.yml 里把 tokenFile 指到你有写权限的位置。${ownerNote}`,
+      }
+    }
+
+    if (code === 'ENOENT') {
+      return {
+        ...base,
+        message: `目标目录不存在：${dir}`,
+        hint: `请确认 ${dir} 可创建，或在配置里把 tokenFile 指到已存在的目录。`,
+      }
+    }
+
+    if (code === 'ENOSPC') {
+      return { ...base, message: '磁盘空间不足', hint: `请清理 ${dir} 所在磁盘。` }
+    }
 
     return {
       ...base,
-      message: `没有写入权限：${path}`,
-      hint:
-        `该文件可能是管理员创建的，普通账号只能读。解决办法（任选其一）：\n` +
-        `① 以管理员身份运行 PowerShell，执行：\n` +
-        `   takeown /f "${path}"\n` +
-        `   icacls "${path}" /grant "%USERNAME%:F"\n` +
-        `② 或者直接删除它，让插件重新创建（会用你的账号，权限自然正确）：\n` +
-        `   Remove-Item "${path}" -Force\n` +
-        `③ 或在 cordis.patch.yml 里把 tokenFile 指到你有写权限的位置。${ownerNote}`,
+      message: `写入失败：${String(err?.message ?? err)}`,
+      hint: `请检查 ${path} 的权限与所在磁盘状态。`,
     }
   }
-
-  if (code === 'ENOENT') {
-    return {
-      ...base,
-      message: `目标目录不存在：${dir}`,
-      hint: `请确认 ${dir} 可创建，或在配置里把 tokenFile 指到已存在的目录。`,
-    }
-  }
-
-  if (code === 'ENOSPC') {
-    return { ...base, message: '磁盘空间不足', hint: `请清理 ${dir} 所在磁盘。` }
-  }
-
-  return {
-    ...base,
-    message: `写入失败：${String(err?.message ?? err)}`,
-    hint: `请检查 ${path} 的权限与所在磁盘状态。`,
-  }
-}
 
   /** 处理 /natfrp 前缀；返回 true = 已接管。 */
   async function handleOwnRoutes(req, res) {
     let url
     try { url = new URL(req.url ?? '/', 'http://127.0.0.1') } catch { return false }
     const path = url.pathname.replace(/\/+$/, '')
-    if (!path.startsWith('/natfrp')) return false
+    if (!isAdminPath(path)) return false
 
     if (path === '/natfrp/api/state' && req.method === 'GET') {
       json(res, 200, await snapshot(originOf(req)))
@@ -777,6 +862,7 @@ function diagnoseWriteFailure(path, err) {
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
       try {
         const [tunnels, nodes] = await Promise.all([api.tunnels(), api.nodes().catch(() => ({}))])
+        noteApiOk()
         const nodeMap = nodes ?? {}
         json(res, 200, {
           tunnels: (tunnels ?? []).map((t) => ({
@@ -785,7 +871,9 @@ function diagnoseWriteFailure(path, err) {
           })),
         })
       } catch (e) {
-        json(res, 502, { error: 'api-failed', message: e instanceof ApiError ? e.message : String(e?.message ?? e) })
+        // 失败也记进健康状态：密钥失效时侧边栏该变红，而不是只有面板里报错
+        lastApiError = e instanceof ApiError ? e.message : String(e?.message ?? e)
+        json(res, 502, { error: 'api-failed', message: lastApiError })
       }
       return true
     }
@@ -812,6 +900,7 @@ function diagnoseWriteFailure(path, err) {
           api.nodes(),
           api.nodeStats().catch(() => null),
         ])
+        noteApiOk()
         const loadOf = new Map()
         for (const n of (stats?.nodes ?? [])) {
           const id = Number(n?.id)
@@ -846,7 +935,9 @@ function diagnoseWriteFailure(path, err) {
             || a.id - b.id)
         json(res, 200, { nodes: list, statsTime: stats?.time ?? null })
       } catch (e) {
-        json(res, 502, { error: 'api-failed', message: e instanceof ApiError ? e.message : String(e?.message ?? e) })
+        // 失败也记进健康状态：密钥失效时侧边栏该变红，而不是只有面板里报错
+        lastApiError = e instanceof ApiError ? e.message : String(e?.message ?? e)
+        json(res, 502, { error: 'api-failed', message: lastApiError })
       }
       return true
     }
@@ -856,12 +947,14 @@ function diagnoseWriteFailure(path, err) {
       let raw = ''
       try { raw = new URLSearchParams(String(req.url ?? '').split('?')[1] ?? '').get('port') ?? '' } catch { /* noop */ }
       const p = Number(raw)
-      if (!Number.isInteger(p) || p < 1 || p > 65535) {
+      // 与 parsePort / config 路由保持同一区间：<1024 是特权端口，
+      // 这里说「可用」也会在保存时被拒，干脆提前按同一口径判掉。
+      if (!Number.isInteger(p) || p < 1024 || p > 65535) {
         json(res, 400, { error: 'bad-port', message: '端口要是 1024–65535 之间的整数', port: raw })
         return true
       }
       const r = await checkPortFree(p)
-      json(res, 200, { port: p, inRange: p >= 1024 && p <= 65535, ...r })
+      json(res, 200, { port: p, inRange: true, ...r })
       return true
     }
 
@@ -1008,6 +1101,7 @@ function diagnoseWriteFailure(path, err) {
       if (!api) { json(res, 400, { error: 'no-token' }); return true }
       try {
         const info = await api.userInfo()
+        noteApiOk()
         // 附带流量包：userInfo.traffic 没有「总量」，算剩余百分比必须靠 data_plans。
         // 端点失败不能拖垮整个账号信息，故单独 catch 并在响应里标注。
         let plans = null
@@ -1019,7 +1113,9 @@ function diagnoseWriteFailure(path, err) {
         }
         json(res, 200, { ...info, dataPlans: plans, dataPlansError: plansError })
       } catch (e) {
-        json(res, 502, { error: 'api-failed', message: e instanceof ApiError ? e.message : String(e?.message ?? e) })
+        // 失败也记进健康状态：密钥失效时侧边栏该变红，而不是只有面板里报错
+        lastApiError = e instanceof ApiError ? e.message : String(e?.message ?? e)
+        json(res, 502, { error: 'api-failed', message: lastApiError })
       }
       return true
     }
@@ -1214,19 +1310,27 @@ function diagnoseWriteFailure(path, err) {
         }
       }
       if (typeof patch.gatePassword === 'string' && patch.gatePassword.length > 0) {
-        gatePassword = patch.gatePassword
+        // 先落盘、成功后再改内存：反过来的话，写失败时内存里已是新密码、
+        // 磁盘上还是旧密码，重启后又变回去 —— 用户完全无法理解发生了什么。
         try {
           mkdirSync(DATA_DIR, { recursive: true })
-          writeFileSync(PASSWORD_FILE, gatePassword, { mode: 0o600 })
+          writeFileSync(PASSWORD_FILE, patch.gatePassword, { mode: 0o600 })
         } catch (e) {
           json(res, 500, { error: 'password-write-failed', message: String(e?.message ?? e) })
           return true
         }
+        gatePassword = patch.gatePassword
+        if (gatePasswordCleared) {
+          // 重新设了密码，撤掉"主动清空"的墓碑，否则重启后它会把密码再次抹掉
+          gatePasswordCleared = false
+          writeState({ gatePasswordCleared: false })
+        }
       } else if (patch.clearGatePassword === true) {
         // 清密码同时删掉 state.json 里的历史副本，否则下次启动又会被读回来
         gatePassword = ''
+        gatePasswordCleared = true
         try { rmSync(PASSWORD_FILE, { force: true }) } catch { /* noop */ }
-        writeState({}, ['gatePassword'])
+        writeState({ gatePasswordCleared: true }, ['gatePassword'])
         logInfo('natfrp: 访问密码已清除（公网访问将被拒绝）')
       }
       if (typeof patch.token === 'string' && patch.token.trim()) {
@@ -1343,8 +1447,8 @@ function diagnoseWriteFailure(path, err) {
       return true
     }
 
-    // 首页（浏览器直接开 /natfrp）
-    if (path === '/natfrp' || path === '/natfrp/') {
+    // 首页（浏览器直接开 /natfrp）；尾部斜杠已被 path 归一化处理
+    if (path === '/natfrp') {
       const s = await snapshot(originOf(req))
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
       res.end(`<!doctype html><meta charset="utf-8"><title>natfrp</title>

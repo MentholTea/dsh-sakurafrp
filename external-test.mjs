@@ -124,4 +124,4 @@ function makeOpen({ right, tabs, base }) {
 
 const ok = results.every(Boolean)
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`)
-process.exit(ok ? 0 : 1)
+setTimeout(() => process.exit(ok ? 0 : 1), 200)

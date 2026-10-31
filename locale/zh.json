@@ -1,11 +1,6 @@
 {
-  "natfrp": {
+  "meta": {
     "title": "内网穿透 (SakuraFrp)",
-    "desc": "托管 SakuraFrp frpc：隧道选择、端口自动同步、流量统计、公网密码门。",
-    "errNoToken": "访问密钥未配置",
-    "errNoTunnel": "未配置隧道 ID",
-    "kickSuspect": "疑似互踢",
-    "tunnelUp": "隧道已上线",
-    "aligned": "端口已对上"
+    "description": "托管 SakuraFrp frpc：隧道选择、端口自动同步、流量统计、公网密码门。把本机 DSH 通过 SakuraFrp 隧道暴露到公网，并用密码门 + Host 围栏反代保护。"
   }
 }

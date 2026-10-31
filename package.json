@@ -1,6 +1,6 @@
 {
   "name": "dsh-sakurafrp",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "main": "index.js",
   "description": "DeepSeek Harness 内建的内网穿透面板：托管 SakuraFrp frpc，隧道列表 / 端口自动同步 / 流量统计 / 公网密码门。",
@@ -20,8 +20,15 @@
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "test-all.mjs",
+    "*-test.mjs",
+    "verify.mjs",
+    "preview-render.mjs"
   ],
+  "engines": {
+    "node": ">=18.2"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
   },

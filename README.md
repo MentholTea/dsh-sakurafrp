@@ -3,6 +3,12 @@
 DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**。
 同一台机器上装了本插件后，不需要再开 SakuraLauncher。
 
+> **2.1.0 安全修复（重要）**：修复了网关管理接口可被公网未授权访问的问题。
+> 2.0.1 及更早版本按 `remoteAddress` 判断「本机」，但公网流量是 frpc 从
+> `127.0.0.1` 转发进来的，来源地址恒为回环——等于把 `/natfrp/api/*`（含改密码）
+> 敞开给任何能访问隧道的人。现在网关侧只认密码门 cookie，没有就走登录页 / 401。
+> **升级前请确认密码已设置。**
+
 - 设置页入口：**设置 → 内网穿透 (SakuraFrp)**
 - 侧边栏入口：左侧面板列表里的「内网穿透」，带**三色状态点**（🟢已连接 / 🟡未连接 / 🔴故障）
   和一键启停**开关**（🟢开 / 🔴关）；折叠成图标栏时状态点回到图标右上角
@@ -12,7 +18,7 @@ DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**
 ```
 Web 设备 → xxx.nyat.app:端口 → SakuraFrp 节点 → frpc(本插件托管)
                                               → 127.0.0.1:<gatePort> 网关
-                                                ├─ /natfrp/*  管理路由（仅本机）
+                                                ├─ /natfrp/*  管理路由（需密码门 cookie）
                                                 ├─ 密码门（HMAC cookie / ?gate=）
                                                 └─ Host 围栏反代 + WS 透传
                                                   → 127.0.0.1:<dshPort> DSH WebServer
@@ -36,7 +42,7 @@ Web 设备 → xxx.nyat.app:端口 → SakuraFrp 节点 → frpc(本插件托管
 - **流量面板**：本日已用 / 剩余流量 + **剩余百分比**（绿→橙→红三档）；
   百分比基于 `data_plans` 的真实总量，不是用「今日+剩余」硬凑的分母
 - **公网密码门**：HMAC 签名 cookie、常量时间比较、按 IP 失败锁定（5 次锁 60s），
-  登录页零外部依赖
+  登录页零外部依赖，登录成功后回到访客原本想去的地址（仅接受站内路径，防开放重定向）
 - **Host 围栏反代**：改写 Host/Origin/Referer/Sec-Fetch-Site 为回环权威，
   透传 WebSocket upgrade，注入非安全上下文 polyfill（crypto.randomUUID / AbortSignal.any）
 - **DSH 二次认证**：实时取 `ctx.connection.authenticatedUrl()` 的 launch token，
@@ -45,14 +51,25 @@ Web 设备 → xxx.nyat.app:端口 → SakuraFrp 节点 → frpc(本插件托管
 
 ## 安装
 
+**方式 A：从 npm 装**（包已发布时）
+
 ```powershell
-# 一条命令（desktop profile）
 dsh plugin --profile desktop add dsh-sakurafrp -w
-
-# web / CLI 场景把 --profile 换成你的 profile 名，例如：
-# dsh plugin --profile web add dsh-sakurafrp -w
-
+# web / CLI 场景把 --profile 换成你的 profile 名，例如 --profile web
 # 然后重启 DSH
+```
+
+> 如果这条命令报 `404 / not found`，说明 npm 上暂时没有可用版本（同名包撤下后有
+> 24 小时冷却），改用下面的源码方式即可。
+
+**方式 B：从源码装**（不依赖 npm）
+
+```powershell
+git clone https://github.com/MentholTea/dsh-sakurafrp.git
+# 在 profile 的 package.json 里：
+#   "dependencies": { "dsh-sakurafrp": "link:<克隆目录绝对路径>" }
+# 并把 "dsh-sakurafrp" 加进 dsh.profile.bundles
+dsh plugin --profile desktop install
 ```
 
 **装完还要做两件事**（frpc 二进制不会被 npm 包携带）：
@@ -62,10 +79,6 @@ dsh plugin --profile desktop add dsh-sakurafrp -w
    （也可以自己下好放到同一路径，或把 `frpcPath` 指到任意位置）
 2. 重启 DSH → 设置页填访问密钥 → 下拉选隧道 → 设公网密码
 
-> 想走源码：`git clone https://github.com/MentholTea/dsh-sakurafrp.git` 后把
-> `dependencies` 写成 `"dsh-sakurafrp": "link:<克隆目录绝对路径>"`，并加入
-> `dsh.profile.bundles`，再 `dsh plugin --profile desktop install`。
-
 frpc 默认取 `~/.dsh/dsh-sakurafrp/frpc-standalone(.exe)`；旧版本放在
 `~/.dsh/bin/` 的会被继续沿用，不必重下。`frpc -V` 输出应含 `sakura`。
 
@@ -73,7 +86,7 @@ frpc 默认取 `~/.dsh/dsh-sakurafrp/frpc-standalone(.exe)`；旧版本放在
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `enabled` | `true` | 插件启用（设置页可改，持久化到 state.json） |
+| `enabled` | `false` | 插件启用（设置页可改，持久化到 state.json）。新装默认关闭，避免装完就把 DSH 挂上公网 |
 | `frpcPath` | `~/.dsh/dsh-sakurafrp/frpc-standalone(.exe)` | frpc 路径（旧 `~/.dsh/bin/` 下的也会被沿用） |
 | `tunnelId` | — | 隧道 ID（设置页下拉选择后持久化） |
 | `tokenFile` | — | 访问密钥文件（优先级最高；设置页写密钥即写此文件） |
@@ -84,7 +97,7 @@ frpc 默认取 `~/.dsh/dsh-sakurafrp/frpc-standalone(.exe)`；旧版本放在
 | `autoAlign` | `true` | 启动前自动把隧道「本地端口」改成 `gatePort` |
 | `maxLogLines` | `500` | 日志环形缓冲行数 |
 
-## 管理接口（本机 only）
+## 管理接口（需密码门 cookie）
 
 ```
 GET  /natfrp/api/state     全量快照（frpc + 网关 + 隧道）
@@ -101,7 +114,10 @@ POST /natfrp/api/config    更新配置 {enabled,tunnelId,gatePort,gatePassword,
                             gatePort 传 null / '' = 清空端口（网关随之停止）
 ```
 
-公网侧访问 `/natfrp/*` 一律 403；只有密码门 + 反代暴露在公网。
+**鉴权边界**：`/natfrp/*` 只在持有密码门 cookie 时才放行，否则返回登录页 / 401。
+不能按来源地址判断「本机还是公网」——公网流量是 frpc 从 `127.0.0.1` 转发进来的，
+两者来源完全相同。本机设置页打的是 DSH webServer 上的同名路由，不经过网关，
+所以本机操作不需要密码。
 
 ## 首次使用
 
@@ -156,11 +172,14 @@ POST /natfrp/api/config    更新配置 {enabled,tunnelId,gatePort,gatePassword,
 也是拿一个临时 `DSH_HOME` 跑冷启动）。
 
 ```powershell
-node test-all.mjs        # 20 个套件、544 项，串行跑并汇总
-node test-all.mjs path   # 只跑名字含关键字的套件
+npm test                 # 22 个套件、597 项，串行跑并汇总
+npm test -- path         # 只跑名字含关键字的套件
 ```
 
 `npm test` 等价于 `node test-all.mjs`。单跑某一个：`node order-test.mjs`。
+
+> 测试文件随包发布（`files` 里包含 `test-all.mjs`、`*-test.mjs`、`verify.mjs`），
+> 所以 `npm install` 之后**也能直接跑 `npm test`**，不必先 clone 仓库。
 
 | 套件 | 项 | 覆盖 |
 |---|---|---|
@@ -177,6 +196,8 @@ node test-all.mjs path   # 只跑名字含关键字的套件
 | `external-test.mjs` | 24 | 外链策略（内置标签 / 退化 / 非绝对地址拒绝） |
 | `token-test.mjs` | 24 | 密钥写入、清除、掩码 |
 | `diag-test.mjs` | 22 | 诊断信息与状态徽标 |
+| `admin-auth-test.mjs` | 22 | 网关管理接口鉴权（8 种路径花招 / WS 同权 / 改密后旧 cookie 失效） |
+| `fixes-test.mjs` | 31 | 已修 bug 回归（跨盘路径 / 互踢误判 / 密码迁移 / 清空不复活 / API 自愈 / 登录回跳） |
 | `defaults-test.mjs` | 19 | 配置默认值 |
 | `scroll-test.mjs` | 14 | 主面板滚动容器链 |
 | `state-test.mjs` | 12 | `state.json` 持久化与坏文件兜底 |
@@ -193,13 +214,27 @@ $env:PREVIEW_VARIANT='fresh'; node preview-render.mjs .preview/fresh.html
 ```
 
 追加真实 API 冒烟（只读端点，会消耗一次 API 调用）：
-`$env:NATFRP_TOKEN='你的密钥'; node verify.mjs`
+
+```powershell
+$env:NATFRP_TOKEN='你的密钥'; node verify.mjs
 ```
 
 ## 已知边界
 
 - DSH 关闭 = 隧道断开（frpc 生命周期与宿主绑定）；需要常驻请另配系统服务
 - 同一隧道绝不能被两个客户端同时连接（互踢），本插件有检测但无法替你关掉另一端
+- **带宽/流量跑满、密钥失效这类问题不会被判成互踢**：`login to server failed` 单独归类，
+  只写日志并在提示里指向"密钥或网络"，不参与互踢计数
+- **失败锁定在 frpc 下是全局的**：所有公网访客同源（都是 `127.0.0.1`），没法按真实 IP
+  分开计数，所以一个人连错 5 次会把登录入口锁 60 秒；已登录的会话不受影响
+- `?gate=<密码>` 直达会把密码写进浏览器历史 / 地址栏，公共设备上请用登录框输入
+- **密码门 cookie 没有 `Secure` 标志**（只有 `HttpOnly; SameSite=Lax`）。这是有意为之：
+  网关上游是 `http://127.0.0.1`，若加 `Secure`，未绑定证书、通过 `http://` 访问的用户
+  会因为浏览器拒发 cookie 而**完全登不进去**。代价是走 HTTP 时 cookie 明文传输——
+  **请务必绑定子域名走 HTTPS**（见上文「证书警告与白屏问题」），否则密码与会话可被中间人截获
+- 界面文案目前只有中文（硬编码在 `client.js` 里）。`locale/*.json` **只提供
+  `meta.title` / `meta.description`**，供插件管理器与设置页显示插件名与描述；
+  界面内的按钮、提示、错误文案不走 i18n，英文环境看到的仍是中文
 - 免费档：2 隧道 / 20 GB 每月 / 10 Mbps
 - API 写操作（edit/delete/create）走官方 OpenAPI，但官方对滥用有风控，别高频调用
 

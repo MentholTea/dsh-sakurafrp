@@ -74,8 +74,26 @@ function isCompressed(headers) {
 
 // ---------------- 密码门 ----------------
 
-function loginPageHtml({ failed = false, locked = false, retryAfter = 0 } = {}) {
+/** HTML 属性转义：next 会嵌进 value="..."，来源是请求 URL，攻击者可构造。 */
+function escAttr(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+/**
+ * 登录成功后的回跳地址。只接受站内绝对路径（以 / 开头、非 //、无反斜杠），
+ * 其余一律回首页 —— next 来自请求 URL / 表单，可被攻击者构造，不能放它变成开放重定向。
+ */
+function safeNext(raw) {
+  const s = String(raw ?? '')
+  if (!s.startsWith('/') || s.startsWith('//') || s.includes('\\')) return '/'
+  if (s.startsWith('/__gate/')) return '/' // 登录页自身不能作为回跳目标（死循环）
+  return s.length <= 512 ? s : '/'
+}
+
+function loginPageHtml({ failed = false, locked = false, retryAfter = 0, next = '/' } = {}) {
   const msg = locked ? `尝试次数过多，请 ${retryAfter} 秒后再试` : failed ? '密码不正确' : ''
+  // next 与默认值相同就不输出隐藏域，登录后照旧回首页
+  const nextField = next && next !== '/' ? `<input type="hidden" name="next" value="${escAttr(next)}">` : ''
   return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>访问验证</title>
@@ -99,6 +117,7 @@ button:active{opacity:.85}
   <h1>远程访问验证</h1>
   <p class="sub">请输入访问密码</p>
   <p class="err">${msg}</p>
+  ${nextField}
   <input type="password" name="password" autocomplete="current-password" autofocus placeholder="访问密码">
   <button type="submit">进入</button>
 </form></body></html>`
@@ -185,9 +204,12 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
   function readBody(req, limit = 4096) {
     return new Promise((resolve) => {
       let body = ''
+      // 超限直接剁掉连接；'close' 兜底保证 promise 一定会落地，
+      // 否则 destroy() 之后只等 'end' 会让这条登录请求永远挂着。
       req.on('data', (c) => { body += c; if (body.length > limit) req.destroy() })
       req.on('end', () => resolve(body))
       req.on('error', () => resolve(body))
+      req.on('close', () => resolve(body))
     })
   }
 
@@ -196,6 +218,9 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
       location,
       'set-cookie': `${COOKIE}=${expected}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${MAX_AGE}`,
       'cache-control': 'no-store',
+      // 跳转目标虽已剥掉 ?gate=，但浏览器仍可能把带密码的原始 URL 作为 Referer
+      // 带给后续请求 / 外链 —— 一律不发 Referer
+      'referrer-policy': 'no-referrer',
     })
     res.end()
   }
@@ -207,7 +232,7 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
       //    公网流量经 frpc 进来，remoteAddress 恒为 127.0.0.1，
       //    一旦放行就等于把 DSH 无认证摊到公网（旧版就是这个行为）。
       if (String(req.headers.accept ?? '').includes('text/html')) {
-        res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+        res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' })
         res.end(noPasswordPageHtml())
       } else {
         res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -223,24 +248,28 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
 
     // 1) 登录提交
     if (req.method === 'POST' && (req.url === '/__gate/login' || req.url === '/__gate/login/')) {
+      // 先读 body：锁定时的重渲染页也要带上 next，解锁后提交才能回到原页面
+      const body = await readBody(req)
+      const params = new URLSearchParams(body)
+      const submitted = params.get('password') ?? ''
+      const next = safeNext(params.get('next'))
       if (lock.locked) {
-        res.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'retry-after': String(lock.retryAfter) })
-        res.end(loginPageHtml({ locked: true, retryAfter: lock.retryAfter }))
+        res.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'retry-after': String(lock.retryAfter), 'referrer-policy': 'no-referrer' })
+        res.end(loginPageHtml({ locked: true, retryAfter: lock.retryAfter, next }))
         return true
       }
-      const body = await readBody(req)
-      const submitted = new URLSearchParams(body).get('password') ?? ''
       if (safeEqual(submitted, password)) {
         failures.delete(ip)
-        grant(res, expected, '/')
+        grant(res, expected, next)
       } else {
         recordFailure(ip)
         const after = lockState(ip)
         res.writeHead(after.locked ? 429 : 200, {
           'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
           ...(after.locked ? { 'retry-after': String(after.retryAfter) } : {}),
         })
-        res.end(loginPageHtml({ failed: !after.locked, locked: after.locked, retryAfter: after.retryAfter }))
+        res.end(loginPageHtml({ failed: !after.locked, locked: after.locked, retryAfter: after.retryAfter, next }))
         log(`gate: 密码错误 ${ip}`)
       }
       return true
@@ -254,7 +283,7 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
     const qp = url.searchParams.get('gate')
     if (qp) {
       if (lock.locked) {
-        res.writeHead(429, { 'content-type': 'text/html; charset=utf-8' })
+        res.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'referrer-policy': 'no-referrer' })
         res.end(loginPageHtml({ locked: true, retryAfter: lock.retryAfter }))
         return true
       }
@@ -264,8 +293,10 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
         grant(res, expected, `${url.pathname}${url.search}` || '/')
       } else {
         recordFailure(ip)
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(loginPageHtml({ failed: true }))
+        // 重渲染的登录页带上「去掉 gate 参数」的目标地址，登录成功后仍回到原页
+        url.searchParams.delete('gate')
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' })
+        res.end(loginPageHtml({ failed: true, next: safeNext(`${url.pathname}${url.search}`) }))
         log(`gate: ?gate= 密码错误 ${ip}`)
       }
       return true
@@ -275,9 +306,11 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
     if (String(req.headers.accept ?? '').includes('text/html')) {
       res.writeHead(lock.locked ? 429 : 200, {
         'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
+        'referrer-policy': 'no-referrer',
         ...(lock.locked ? { 'retry-after': String(lock.retryAfter) } : {}),
       })
-      res.end(loginPageHtml({ locked: lock.locked, retryAfter: lock.retryAfter }))
+      // 带上原地址：登录成功后回到访客想去的页面，而不是一律回首页
+      res.end(loginPageHtml({ locked: lock.locked, retryAfter: lock.retryAfter, next: safeNext(req.url) }))
     } else {
       res.writeHead(401, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
       res.end('{"error":"unauthorized"}')
@@ -285,15 +318,26 @@ export function createPasswordGate({ getPassword, maxFailures = 5, lockMs = 60_0
     return true
   }
 
-  /** WS 升级请求的验权（只看 cookie；未配置密码时一律拒绝，理由同上）。 */
-  function checkWs(req) {
+  /**
+   * 请求是否已持有有效的密码门 cookie。
+   *
+   * ⚠️ 这是网关侧唯一的可信身份来源。不要试图用 remoteAddress 区分
+   *    「本机 / 公网」—— 公网流量经 frpc 从 127.0.0.1 转发进来，
+   *    两者来源地址完全相同，永远判不出来。
+   */
+  function checkCookie(req) {
     const password = String(getPassword?.() ?? '')
     if (!password) return false
     const cookies = parseCookies(req.headers.cookie)
     return Boolean(cookies[COOKIE]) && safeEqual(cookies[COOKIE], cookieFor(password))
   }
 
-  return { handle, checkWs }
+  /** WS 升级请求的验权（语义与 checkCookie 相同，保留旧名以免调用点分散）。 */
+  function checkWs(req) {
+    return checkCookie(req)
+  }
+
+  return { handle, checkCookie, checkWs }
 }
 
 // ---------------- 反向代理 ----------------
@@ -325,7 +369,8 @@ export function createGateServer({
   function withLaunchToken(reqUrl, cookieHeader) {
     const token = String(launchToken?.() ?? '')
     if (!token) return reqUrl
-    if (String(cookieHeader ?? '').includes('dsh-auth')) return reqUrl
+    // 只认完整的 cookie 名，避免 `dsh-auth-old=...` 这类前缀相同的 cookie 误命中
+    if (/(?:^|;\s*)dsh-auth=/.test(String(cookieHeader ?? ''))) return reqUrl
     try {
       const u = new URL(reqUrl, 'http://127.0.0.1')
       if (u.searchParams.has('token')) return reqUrl
@@ -520,9 +565,16 @@ export function createGateServer({
   return {
     server,
     listen: () => new Promise((resolve, reject) => {
-      server.once('error', reject)
+      /**
+       * ⚠️ 这个监听器必须常驻：启动期的 EADDRINUSE 要 reject，
+       *    跑起来之后的 error（EMFILE / 底层 socket 异常）如果没有 handler，
+       *    Node 会把它抛到进程顶层，直接击穿宿主。
+       */
+      server.on('error', (e) => {
+        if (!server.listening) reject(e)
+        else log(`gate: server error: ${e?.message ?? e}`)
+      })
       server.listen(port, host, () => {
-        server.removeListener('error', reject)
         const addr = server.address()
         resolve({ port: typeof addr === 'object' && addr ? addr.port : port })
       })

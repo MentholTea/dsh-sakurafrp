@@ -78,4 +78,4 @@ rec('CSS 有 red 档', /data-natfrp-state="red"/.test(src))
 
 const ok = results.every(Boolean)
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`)
-process.exit(ok ? 0 : 1)
+setTimeout(() => process.exit(ok ? 0 : 1), 200)
