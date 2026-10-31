@@ -81,6 +81,8 @@ function makeWriteState(statePath) {
   return (patch) => {
     const read = () => { try { return JSON.parse(readFileSync(statePath, 'utf8')) ?? {} } catch { return {} } }
     const merged = { ...read(), ...patch }
+    // 与 index.js 的 writeState 保持一致：访问密码永不落 state.json
+    delete merged.gatePassword
     writeFileSync(statePath, JSON.stringify(merged, null, 2))
     return merged
   }
@@ -93,7 +95,7 @@ function makeWriteState(statePath) {
   const st = JSON.parse(readFileSync(p, 'utf8'))
   rec('合并写入保留 enabled', st.enabled === true)
   rec('合并写入保留 tunnelId', st.tunnelId === '999')
-  rec('合并写入保留 gatePassword', st.gatePassword === 'keep-me')
+  rec('合并写入剥掉 gatePassword（密码不落 state.json）', !('gatePassword' in st))
   rec('合并写入添加 dismiss 记录', Array.isArray(st.dismissedFrpcPrompts) && st.dismissedFrpcPrompts.length === 1)
 }
 
@@ -101,4 +103,4 @@ rmSync(sandbox, { recursive: true, force: true })
 
 const ok = results.every(Boolean)
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`)
-process.exit(ok ? 0 : 1)
+setTimeout(() => process.exit(ok ? 0 : 1), 200)

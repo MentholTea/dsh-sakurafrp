@@ -55,4 +55,4 @@ rec('日志提供新窗口打开（长日志兜底）', /在新窗口打开/.tes
 
 const ok = results.every(Boolean)
 console.log(`\n${results.filter(Boolean).length}/${results.length} passed`)
-process.exit(ok ? 0 : 1)
+setTimeout(() => process.exit(ok ? 0 : 1), 200)

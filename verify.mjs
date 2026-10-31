@@ -272,4 +272,4 @@ try { UPSTREAM.server.close() } catch { /* noop */ }
 
 const failed = results.filter((r) => !r.pass)
 console.log(`\n${results.length - failed.length}/${results.length} passed`)
-process.exit(failed.length === 0 ? 0 : 1)
+setTimeout(() => process.exit(failed.length === 0 ? 0 : 1), 200)

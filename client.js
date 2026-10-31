@@ -1095,6 +1095,10 @@ window.__ModuleLoader__.load({
       // 优先用流量包的真总量算剩余百分比；拿不到就退化为「本日+剩余」的近似
       // （近似值偏乐观——它把今天用的当成了全部已用，仅作无数据时的兜底）。
       const plans = Array.isArray(user?.dataPlans) ? user.dataPlans : []
+      // 实名徽标文案：realname=2 已实名，0/1 显示等级；取不到就不显示（不能渲染成 Lundefined）
+      const realnameText = user?.realname === 2
+        ? '已实名'
+        : Number.isFinite(Number(user?.realname)) ? `实名 L${user.realname}` : ''
       const planTotal = plans.reduce((s, p) => s + (Number(p?.total) || 0), 0)
       const planRemaining = plans.reduce((s, p) => s + (Number(p?.remaining) || 0), 0)
       const hasPlan = planTotal > 0
@@ -1216,8 +1220,9 @@ window.__ModuleLoader__.load({
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
               title: `${user.name} · ${user.speed}`,
             },
-              h('span', { style: S.badge(true) }, user.realname === 2 ? '已实名' : `实名 L${user.realname}`),
-              ' ',
+              realnameText
+                ? h('span', { style: S.badge(true) }, realnameText, ' ')
+                : null,
               `${user.name} · ${user.speed}`),
             h('div', { style: { ...S.trafficBar, flex: '1 1 auto', minWidth: 0, marginTop: 0 } },
               h('div', { style: S.trafficFill(remainPct) })),

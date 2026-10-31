@@ -5,14 +5,15 @@
 //   · 我们只信任这个 API 返回的 URL，不接受任何用户输入的地址
 //
 // 安全约束：
-//   · 目标路径固定在 ~/.dsh/bin/ 下，不跟随用户输入
+//   · 目标路径由调用方决定（默认插件私有目录 ~/.dsh/dsh-sakurafrp/），
+//     只信任官方 API 返回的下载地址，不接受任何用户输入的 URL
 //   · 下载后 MD5 与官方 hash 比对，不一致立刻删除
 //   · 再跑一次 `-V` 确认输出含 sakura 字样（防止拿到原版 frp）
 //   · 过程中失败一律清理半成品，绝不留下损坏的可执行文件
 
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
-import { chmodSync, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { spawn } from 'node:child_process'
 

@@ -10,7 +10,7 @@
 //   · 官方那三个行为细节必须复现，漏一个就会写错目录（见 expandTilde / resolveRoot）
 
 import { homedir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { existsSync } from 'node:fs'
 
 /** frpc 可执行文件名（Windows 带 .exe）。 */
@@ -183,19 +183,26 @@ export function resolveFrpcPath({
 }
 
 /**
- * 面向用户的路径显示：默认位置显示成 `~/.dsh/bin/xxx`，否则显示绝对路径。
+ * 面向用户的路径显示：默认位置显示成 `~/.dsh/...`，否则显示绝对路径。
  * 避免设置页出现 `C:\Users\某某` 这种泄漏隐私的串。
+ *
+ * ⚠️ 必须先判断「这个路径真的在 home 之下」，不能直接按字符串长度截断：
+ *    用户把 frpcPath 指到另一个盘（D:\tools\frpc.exe）时，截断会得到
+ *    `~/.dsh/.exe` 这种半截路径 —— 设置页会把用户指向一个不存在的位置。
  */
 export function displayPath(absPath, home = resolveDshHome()) {
   try {
-    const defaultHome = join(homedir(), '.dsh')
+    const p = String(absPath ?? '')
+    if (!p) return p
     const normalizedHome = resolve(home)
-    const normalizedDefault = resolve(defaultHome)
-    if (normalizedHome === normalizedDefault) {
-      const rest = absPath.slice(normalizedHome.length).replace(/^[\\/]+/, '')
-      return rest ? `~/.dsh/${rest.replace(/\\/g, '/')}` : '~/.dsh'
-    }
-    return absPath
+    const normalizedDefault = resolve(join(homedir(), '.dsh'))
+    // 只有 home 就是默认位置时才缩成 ~/.dsh；自定义 home 原样显示
+    if (normalizedHome !== normalizedDefault) return p
+    const rel = relative(normalizedHome, resolve(p))
+    if (rel === '') return '~/.dsh'
+    // 跨盘、上跳、或 relative 直接返回了绝对路径：都不能缩，原样返回
+    if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return p
+    return `~/.dsh/${rel.split(sep).join('/')}`
   } catch {
     return absPath
   }

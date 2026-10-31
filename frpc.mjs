@@ -31,6 +31,7 @@ export function createFrpcManager({
   const lines = []
   let disconnectTimes = [] // 互踢检测窗口
   let kickSuspect = false
+  let authFailLoggedAt = 0 // 「登录失败」日志的节流时间戳（与互踢分开计数）
 
   function pushLine(text) {
     const s = String(text ?? '').replace(/\s+$/, '')
@@ -49,13 +50,14 @@ export function createFrpcManager({
       backoffMs = 1000
       disconnectTimes = []
       kickSuspect = false
+      authFailLoggedAt = 0 // 成功过一次，之后再登录失败要重新提示
     }
     const m = String(text).match(/使用\s*>>\s*([^\s<]+)\s*<</)
     if (m) {
       // remote 形如 host:port；http/https 隧道没有端口
       tunnelUrl = m[1].includes(':') ? m[1] : `https://${m[1]}`
     }
-    if (/网络波动导致数据连接断开|login to server failed/i.test(text)) {
+    if (/网络波动导致数据连接断开/i.test(text)) {
       const now = Date.now()
       disconnectTimes.push(now)
       disconnectTimes = disconnectTimes.filter((t) => now - t < KICK_WINDOW_MS)
@@ -63,6 +65,20 @@ export function createFrpcManager({
         kickSuspect = true
         log(`frpc: 疑似互踢——窗口 ${KICK_WINDOW_MS / 1000}s 内断线 ${disconnectTimes.length} 次。` +
           `请确认 SakuraFrp 启动器 / 其它机器上的 frpc 没有连接同一条隧道。`)
+      }
+    }
+    /**
+     * ⚠️ 「login to server failed」不能计入互踢。
+     *   它更常见的原因是访问密钥错误 / 过期 / 本机断网，跟"两个客户端抢同一条隧道"
+     *   毫无关系；混在一起会让密钥填错的用户看到「疑似互踢」，
+     *   然后去查另一台机器，永远查不到问题。
+     *   这里单独记一条日志（30s 内不重复刷屏），把方向指对。
+     */
+    if (/login to server failed/i.test(text)) {
+      const now = Date.now()
+      if (now - authFailLoggedAt > 30_000) {
+        authFailLoggedAt = now
+        log('frpc: 登录服务器失败——通常是访问密钥无效/过期，或本机网络不通（不计入互踢判定）')
       }
     }
   }
@@ -128,6 +144,7 @@ export function createFrpcManager({
     tunnelUrl = ''
     kickSuspect = false
     disconnectTimes = []
+    authFailLoggedAt = 0
 
     const myGen = generation
     // ⚠️ 这里不能放 `-n`：它是个需要取值的 flag，extraArgs 为空时就悬在参数末位，

@@ -91,4 +91,10 @@ await new Promise((r2) => upstream.close(r2))
 const pass = results.filter((x) => x.startsWith('PASS')).length
 console.log(results.join('\n'))
 console.log(`\n${pass}/${results.length} passed`)
-process.exit(pass === results.length ? 0 : 1)
+
+// ⚠️ 不能直接 process.exit：上面几轮 fetch 的 keep-alive socket 还没释放完，
+//    在 Windows 上会撞上 libuv 的
+//    `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c`
+//    断言 —— 断言明明全过，退出码却是 0xC0000409，整套 npm test 因此变红。
+//    延迟一拍再退，让 socket 与 handle 有时间收尾（与 apply-test 等套件一致）。
+setTimeout(() => process.exit(pass === results.length ? 0 : 1), 200)
