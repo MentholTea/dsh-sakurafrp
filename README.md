@@ -13,7 +13,7 @@ DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**
 > Windows + WSL2。请自行审阅源码后再使用；涉及安全敏感场景时请格外谨慎。
 > 代码按 MIT「按原样（AS IS）」提供，不附带任何担保，风险自负。
 >
-> 与「AI 生成即不可靠」无关的部分：**测试是可复核的**。`npm test` 是 22 个套件、609 项
+> 与「AI 生成即不可靠」无关的部分：**测试是可复核的**。`npm test` 是 23 个套件、643 项
 > 全离线的断言，其中 `admin-auth-test.mjs` 专门覆盖网关鉴权（8 种路径花招、WS 同权、
 > 改密后旧 cookie 失效）。数字与结论都能自己跑一遍验证，不必只信这段说明。
 
@@ -232,7 +232,19 @@ POST /natfrp/api/align     把隧道「本地端口」改成插件正在用的�
 POST /natfrp/api/tunnel/create  新建一条 TCP 隧道 {name,node,port}，本地端口指向插件
 POST /natfrp/api/config    更新配置 {enabled,tunnelId,gatePort,gatePassword,token,clearGatePassword}
                             gatePort 传 null / '' = 清空端口（网关随之停止）
+GET  /natfrp/api/frpc/check        本地 frpc 是否存在 / 版本是否合规（不下载）
+GET  /natfrp/api/frpc/update-check 手动对比本地与官方最新版号（无自动检查）
+                            结论带 updateAvailable / current / latest；
+                            60s 内重复请求带 throttled + retryAfter，不静默复用缓存
+POST /natfrp/api/frpc/install      一键下载安装 / 替换为新版（运行中会先停、完成自动恢复）
+POST /natfrp/api/frpc/dismiss      忽略当前 frpc 提示（按问题类型 + 路径记忆）
+POST /natfrp/api/frpc/undismiss    恢复被忽略的提示
+POST /natfrp/api/frpc/ack-result   确认安装结果提示（落盘，跨会话不再弹）
 ```
+
+**版本更新是纯手动的**：插件不会在启动、轮询或任何后台时机去查官方清单，
+只有用户在面板顶部点「检查更新」才发一次请求；60 秒内重复点击会被节流并提示
+「别按太频繁，N 秒后再查」。确认有新版本后，再点「更新到 X」才真正下载替换。
 
 **鉴权边界**：`/natfrp/*` 只在持有密码门 cookie 时才放行，否则返回登录页 / 401。
 不能按来源地址判断「本机还是公网」——公网流量是 frpc 从 `127.0.0.1` 转发进来的，
@@ -265,7 +277,7 @@ POST /natfrp/api/config    更新配置 {enabled,tunnelId,gatePort,gatePassword,
 也是拿一个临时 `DSH_HOME` 跑冷启动）。
 
 ```powershell
-npm test                 # 22 个套件、597 项，串行跑并汇总
+npm test                 # 23 个套件、643 项，串行跑并汇总
 npm test -- path         # 只跑名字含关键字的套件
 ```
 
@@ -280,13 +292,13 @@ npm test -- path         # 只跑名字含关键字的套件
 
 | 套件 | 项 | 覆盖 |
 |---|---|---|
-| `verify.mjs` | 26 | 模块级 + 网关全链路（API 客户端 / frpc 解析 / 密码门 / 围栏 / WS 透传） |
+| `verify.mjs` | 31 | 模块级 + 网关全链路（API 客户端 / frpc 解析 / 密码门 / 围栏 / WS 透传） |
 | `order-test.mjs` | 61 | 四步解锁顺序、表单排布、按钮文案与出现条件 |
 | `paths-test.mjs` | 51 | frpc / DSH home 路径解析（含 `$DSH_HOME` 空白、`PROFILE_DIR` 反推） |
 | `tunnel-create-test.mjs` | 50 | 新建隧道（端口来源、`extra.auto_https`、官方告警回传） |
-| `progressive-test.mjs` | 49 | 渐进解锁派生状态与提示语 |
+| `progressive-test.mjs` | 59 | 渐进解锁派生状态与提示语 |
 | `feedback-test.mjs` | 37 | 操作反馈、错误码与文案 |
-| `installer-test.mjs` | 36 | frpc 资产挑选 / 下载 / 版本校验 |
+| `installer-test.mjs` | 52 | frpc 资产挑选 / 下载 / 版本校验 / 版本号提取与比较 |
 | `dismiss-test.mjs` | 29 | 官方提醒的关闭状态机（按路径记忆） |
 | `traffic-test.mjs` | 27 | 流量口径与剩余百分比 |
 | `apply-test.mjs` | 26 | `apply()` 装配、路由注册、冷启动默认值 |
@@ -296,6 +308,7 @@ npm test -- path         # 只跑名字含关键字的套件
 | `admin-auth-test.mjs` | 22 | 网关管理接口鉴权（8 种路径花招 / WS 同权 / 改密后旧 cookie 失效） |
 | `fixes-test.mjs` | 31 | 已修 bug 回归（跨盘路径 / 互踢误判 / 密码迁移 / 清空不复活 / API 自愈 / 登录回跳） |
 | `defaults-test.mjs` | 19 | 配置默认值 |
+| `update-check-test.mjs` | 15 | 手动检查更新（结论 / 60s 节流 / 连点拦截 / hooks 规则） |
 | `scroll-test.mjs` | 14 | 主面板滚动容器链 |
 | `state-test.mjs` | 12 | `state.json` 持久化与坏文件兜底 |
 | `switch-test.mjs` | 11 | 侧边栏开关状态机（乐观更新 / 连点保护） |

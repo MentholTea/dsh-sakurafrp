@@ -112,7 +112,16 @@ window.__ModuleLoader__.load({
     async function getJSON(path) {
       const r = await fetch(`${API}${path}`, { credentials: 'same-origin' })
       const body = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(body.message || body.error || `HTTP ${r.status}`)
+      if (!r.ok) {
+        // 把结构化字段附在错误上，调用方才能给出具体提示
+        // （例如节流的 retryAfter：光说"太频繁"用户不知道该等多久）
+        const err = new Error(body.message || body.error || `HTTP ${r.status}`)
+        err.code = body.error
+        err.retryAfter = body.retryAfter
+        err.throttled = body.throttled === true
+        err.status = r.status
+        throw err
+      }
       return body
     }
     async function post(path, body) {
@@ -392,6 +401,150 @@ window.__ModuleLoader__.load({
     })()
 
     /**
+     * frpc 版本行：常驻显示当前版本（悬停给完整 -V 输出），右侧「检查更新」纯手动。
+     *
+     * 用户明确要求：
+     *   · 不做任何自动/后台检查 —— 只有点按钮才发请求
+     *   · 频繁点击要被提醒 —— 后端 60s 节流返回 429，这里把提示显式说出来
+     * 有新版时出现「更新到 X」按钮，走现有 /frpc/install（后端会先停 frpc、
+     * 成功后自动恢复启动，失败也回滚并把 frpc 拉回来）。
+     */
+    function FrpcVersionBar({ inst, onDone }) {
+      const presence = inst ?? {}
+      const present = Boolean(presence.present)
+      const healthy = present && presence.ok !== false
+
+      /**
+       * ⚠️ 所有 hooks 必须声明在任何提前 return 之前。
+       *   若先 `if (!healthy) return null` 再 useState，hooks 数量会随 healthy
+       *   真假来回变化 —— React 抛 "Rendered fewer hooks than expected"，
+       *   表现为 frpc 装好 / 坏掉的那一刻整个面板白屏。
+       *   提前 return 统一放在下面的 JSX 之前。
+       */
+      const [checking, setChecking] = useState(false)
+      const [updMsg, setUpdMsg] = useState('')
+      const [updOk, setUpdOk] = useState(false) // 提示颜色：true=绿/信息，false=警告/错误
+      const [update, setUpdate] = useState(null) // { current, latest }
+
+      const currentVersion = presence.version || ''
+      // 悬停给完整 -V 输出（含 built/hash），平时只显示短版本号
+      const fullVersion = presence.versionFull || currentVersion || '未知'
+
+      // 下载进度由 /state 轮询驱动（POST /frpc/install 是 202 立即返回）：
+      // 更新进行中时版本栏顶替安装卡显示进度（安装卡在 healthy 时是隐藏的）
+      const progress = presence.progress ?? null
+      const pct = progress && progress.total
+        ? Math.min(100, Math.round((progress.received / progress.total) * 100))
+        : null
+      const mbText = progress && progress.received
+        ? `${(progress.received / 1048576).toFixed(1)}${progress.total ? ` / ${(progress.total / 1048576).toFixed(1)}` : ''} MB`
+        : ''
+
+      const doCheck = async () => {
+        setChecking(true); setUpdMsg(''); setUpdOk(false)
+        try {
+          const r = await getJSON('/frpc/update-check')
+          setUpdate(r)
+          setUpdOk(r.ok !== false && !r.throttled)
+          /**
+           * 被节流时优先显示提醒，而不是只显示结论文字。
+           * 带上 retryAfter（秒），用户知道还要等多久，不会继续猛点。
+           * 结论本身（"已是最新版本" / "有新版本"）放在提醒后面，两件事都要看到。
+           */
+          const needSec = Number(r.retryAfter) > 0 ? Math.ceil(Number(r.retryAfter)) : 0
+          const throttleTip = `⏱ 别按太频繁，${needSec > 0 ? `${needSec} 秒后再查` : '稍后再查'}`
+          const conclusion = r.message || ''
+          setUpdMsg(r.throttled
+            ? (conclusion && !/^检查太频繁/.test(conclusion) ? `${throttleTip} · ${conclusion}` : throttleTip)
+            : conclusion)
+        } catch (e) {
+          setUpdOk(false)
+          // 429 节流：把剩余秒数说清楚，否则用户只看到"太频繁"仍会继续点
+          const needSec = Number(e.retryAfter) > 0 ? Math.ceil(Number(e.retryAfter)) : 0
+          setUpdMsg(e.throttled
+            ? `⏱ 别按太频繁，${needSec > 0 ? `${needSec} 秒后再查` : '稍后再查'}`
+            : String(e.message || e))
+        } finally {
+          setChecking(false)
+        }
+      }
+
+      const doUpdate = async () => {
+        setUpdMsg(''); setUpdOk(false)
+        try {
+          await post('/frpc/install')
+          // 202 已受理：进度条由 /state 轮询（installingNow 时 400ms 一轮）接管
+          setUpdate(null)
+          onDone?.()
+        } catch (e) {
+          setUpdOk(false)
+          setUpdMsg(String(e.message || e))
+        }
+      }
+
+      /**
+       * 未安装 / 不可用时不显示这一行：那是 FrpcInstallCard 的事，别两头提示。
+       * ⚠️ 必须放在全部 hooks 之后（见上方说明），否则 hooks 数量不稳定。
+       */
+      if (!healthy) return null
+
+      return h('div', {
+        style: {
+          display: 'flex', alignItems: 'center', gap: '8px',
+          flexWrap: 'wrap', padding: '2px 0', minHeight: '20px',
+        },
+      },
+        h('span', { style: { ...S.hint, marginTop: 0 } }, 'frpc'),
+        h('span', {
+          style: { ...S.code, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+          title: fullVersion,
+        }, currentVersion || '版本未知'),
+        // 更新下载中：进度条顶替按钮区（版本号保留，一眼知道在更什么）
+        progress
+          ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 160px', minWidth: 0 } },
+            h('span', { style: { ...S.hint, marginTop: 0, fontSize: '11px', flex: 'none' } },
+              progress.phase === 'checking' ? '正在查询下载地址…' : `正在下载…${pct === null ? '' : ` ${pct}%`}`),
+            h('div', { style: { ...S.trafficBar, flex: '1 1 auto', minWidth: '60px', marginTop: 0, height: '6px' } },
+              h('div', {
+                style: {
+                  height: '100%', width: pct === null ? '15%' : `${Math.max(3, pct)}%`,
+                  borderRadius: '4px', background: '#3b82f6', transition: 'width .25s ease',
+                },
+              })),
+            mbText ? h('span', { style: { ...S.hint, marginTop: 0, fontSize: '11px', flex: 'none' } }, mbText) : null)
+          : h('button', {
+            type: 'button',
+            style: {
+              ...S.btnGhost, padding: '2px 9px', fontSize: '11px', flex: 'none',
+              ...(checking ? { opacity: 0.6 } : {}),
+            },
+            disabled: checking,
+            onClick: doCheck,
+            title: '手动检查 SakuraFrp 官方是否有新版 frpc（不会自动检查）',
+          }, checking ? '检查中…' : '检查更新'),
+        // 频繁点击的提醒（后端 60s 节流 429）与普通结论共用一条消息位
+        updMsg && !progress
+          ? h('span', {
+            style: {
+              fontSize: '11px', flex: '1 1 160px', minWidth: 0,
+              color: updOk ? '#16a34a' : '#d97706',
+              lineHeight: 1.45,
+            },
+          }, updMsg)
+          : null,
+        // 有新版才出现「更新」按钮 —— 更新是用户主动确认的动作
+        !progress && update && update.updateAvailable
+          ? h('button', {
+            type: 'button',
+            style: { ...S.btn, padding: '2px 9px', fontSize: '11px', flex: 'none' },
+            disabled: checking,
+            onClick: doUpdate,
+            title: '下载新版并替换本地 frpc（运行中会先停止，完成后自动恢复）',
+          }, `更新到 ${update.latest || '新版'}`)
+          : null)
+    }
+
+    /**
      * frpc 安装卡片。
      * 只在「未安装 / 装的不对 / 正在安装 / 刚装完要看结果」时出现；装好且提示过期后整卡消失。
      *
@@ -451,7 +604,6 @@ window.__ModuleLoader__.load({
 
       // 已装好 且 没有待展示的结果 → 不占地方
       if (healthy && !showResult) return null
-
       // 用户叉掉过同类问题，且当前没有新的安装结果要看 → 收起成一行小字
       if (dismissedByUser && !showResult) {
         return h('div', {
@@ -1189,6 +1341,9 @@ window.__ModuleLoader__.load({
       return h('div', { style: S.wrap },
         // ── frpc 缺失时的安装引导（置顶，最显眼）──
         h(FrpcInstallCard, { inst: st.frpcInstall, onDone: () => void loadState() }),
+
+        // ── frpc 版本 + 手动检查更新（置顶；未安装/异常时自动隐藏）──
+        h(FrpcVersionBar, { inst: st.frpcInstall, onDone: () => void loadState() }),
 
         // ── 总开关 + 运行状态（原来三行标题，现在并成一行）──
         h('div', { style: S.row },
