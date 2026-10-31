@@ -19,7 +19,7 @@ const ok = (name, cond, extra = '') => {
   return cond
 }
 
-const mod = await import('./index.js')
+const mod = await import('../index.js')
 
 let handler = null
 const upstream = createServer((req, res) => { res.writeHead(200); res.end('dsh-ok') })

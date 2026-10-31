@@ -1,0 +1,20 @@
+# 统一换行符：仓库内一律 LF。
+#
+# 为什么必须钉死：部分测试用正则断言行结构（例如 /note: '...',\n\s+extra,/），
+# 在 CRLF 检出上 `\n` 匹配不到 `\r\n`，这些断言会全部失败——而代码本身是对的。
+# 曾经的表现就是 Windows 本地 `npm test` 报 6 项失败、Linux/CI 却全绿。
+* text=auto eol=lf
+
+# 显式声明，避免 eol 规则波及二进制资源
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.tgz binary
+*.exe binary
+*.zip binary
+
+# Windows 侧脚本保留 CRLF 才不会把 cmd/PowerShell 解析搞坏
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf

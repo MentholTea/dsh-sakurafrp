@@ -23,7 +23,7 @@ const rec = (name, cond, extra = '') => {
   return cond
 }
 
-const mod = await import('./index.js')
+const mod = await import('../index.js')
 
 let handler = null
 const logger = () => ({ info: () => {}, warn: () => {}, error: () => {}, log: () => {} })

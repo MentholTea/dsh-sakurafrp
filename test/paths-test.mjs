@@ -4,7 +4,7 @@ const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FA
 
 import { homedir } from 'node:os'
 import { join, resolve, isAbsolute } from 'node:path'
-import { frpcBinaryName, expandTilde, resolveDshHome, resolveFrpcPath, displayPath, inferHomeFromProfileDir, dshHomeSource } from './paths.mjs'
+import { frpcBinaryName, expandTilde, resolveDshHome, resolveFrpcPath, displayPath, inferHomeFromProfileDir, dshHomeSource } from './../paths.mjs'
 
 const HOME = homedir()
 const DEFAULT_HOME = join(HOME, '.dsh')

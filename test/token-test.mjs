@@ -7,8 +7,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { readFileSync as rf } from 'node:fs'
-const index = rf(new URL('./index.js', import.meta.url), 'utf8')
-const client = rf(new URL('./client.js', import.meta.url), 'utf8')
+const index = rf(new URL('../index.js', import.meta.url), 'utf8')
+const client = rf(new URL('../client.js', import.meta.url), 'utf8')
 
 // ── 1) 静态结构 ──
 rec('有 FALLBACK_TOKEN_FILE 常量', /const FALLBACK_TOKEN_FILE = join\(DATA_DIR, 'token\.txt'\)/.test(index))

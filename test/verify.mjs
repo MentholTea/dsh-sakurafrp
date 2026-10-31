@@ -5,9 +5,9 @@
 //   VERIFY_DSH_PORT 上游假 DSH 端口（默认起一个内置假服务器）
 
 import { createServer, request as httpRequest } from 'node:http'
-import { createClient, ApiError, fmtBytes } from './natfrp.mjs'
-import { createFrpcManager } from './frpc.mjs'
-import { createPasswordGate, createGateServer } from './gate.mjs'
+import { createClient, ApiError, fmtBytes } from './../natfrp.mjs'
+import { createFrpcManager } from './../frpc.mjs'
+import { createPasswordGate, createGateServer } from './../gate.mjs'
 
 const results = []
 function record(name, pass, detail = '') {

@@ -176,10 +176,14 @@ npm test                 # 22 个套件、597 项，串行跑并汇总
 npm test -- path         # 只跑名字含关键字的套件
 ```
 
-`npm test` 等价于 `node test-all.mjs`。单跑某一个：`node order-test.mjs`。
+`npm test` 等价于 `node test-all.mjs`。单跑某一个：`node test/order-test.mjs`。
 
-> 测试文件随包发布（`files` 里包含 `test-all.mjs`、`*-test.mjs`、`verify.mjs`），
+> 测试文件随包发布（`files` 里包含 `test-all.mjs` 与 `test/*.mjs`），
 > 所以 `npm install` 之后**也能直接跑 `npm test`**，不必先 clone 仓库。
+>
+> 仓库用 `.gitattributes` 把换行符钉成 LF。部分断言用正则检查源码结构
+> （如 `/note: '...',\n\s+extra,/`），CRLF 检出会让 `\n` 匹配不到 `\r\n`，
+> 导致这些断言在本机全线飘红而代码本身无误。
 
 | 套件 | 项 | 覆盖 |
 |---|---|---|

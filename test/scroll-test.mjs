@@ -6,7 +6,7 @@ const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FA
 
 // ── 提取 NatfrpMainPanel 源码并静态断言 ──
 import { readFileSync } from 'node:fs'
-const src = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 
 function grab(fnName) {
   const start = src.indexOf(`function ${fnName}(`)

@@ -15,9 +15,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
+const suiteDir = join(here, 'test')
 const filter = process.argv[2] ?? ''
 
-const suites = readdirSync(here)
+const suites = readdirSync(suiteDir)
   .filter((f) => f.endsWith('-test.mjs') || f === 'verify.mjs')
   .filter((f) => !filter || f.includes(filter))
   .sort()
@@ -32,7 +33,7 @@ let failed = 0
 const failedNames = []
 
 for (const file of suites) {
-  const r = spawnSync(process.execPath, [join(here, file)], { encoding: 'utf8', timeout: 120_000 })
+  const r = spawnSync(process.execPath, [join(suiteDir, file)], { encoding: 'utf8', timeout: 120_000 })
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
   const m = out.match(/(\d+)\/(\d+) passed/)
   const [got, total] = m ? [Number(m[1]), Number(m[2])] : [0, 0]

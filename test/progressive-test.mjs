@@ -12,8 +12,8 @@
  */
 import { readFileSync } from 'node:fs'
 
-const client = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
-const index = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
 
 let pass = 0
 let fail = 0

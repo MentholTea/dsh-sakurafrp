@@ -8,7 +8,7 @@ const results = []
 const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`) }
 
 import { readFileSync } from 'node:fs'
-const src = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 
 // 从源码抽出 diagOf 真实实现来做行为验证（而不是复制一份逻辑）
 function grab(code, fn) {

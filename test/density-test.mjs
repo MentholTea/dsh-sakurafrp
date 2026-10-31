@@ -18,7 +18,7 @@ const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FA
 const skip = (n, why) => { results.push(true); console.log(`SKIP  ${n} — ${why}`) }
 
 const here = dirname(fileURLToPath(import.meta.url))
-const client = readFileSync(resolve(here, 'client.js'), 'utf8')
+const client = readFileSync(resolve(here, '..', 'client.js'), 'utf8')
 
 // ── 1) 结构：三行一组的字段压成一行 ──
 rec('wrap 间距 ≤ 10px（间距统一由 wrap 控）', /wrap: \{ padding: '[^']*', display: 'flex', flexDirection: 'column', gap: '([0-9]|10)px' \}/.test(client))
@@ -58,7 +58,7 @@ const browser = BROWSERS.find((p) => existsSync(p))
 /** 渲染某个状态，返回面板内容的像素高度 */
 function measure(variant) {
   const out = join(tmpdir(), `dsh-sakurafrp-density-${variant}.html`)
-  execFileSync(process.execPath, [resolve(here, 'preview-render.mjs'), out], {
+  execFileSync(process.execPath, [resolve(here, '..', 'preview-render.mjs'), out], {
     cwd: here,
     env: { ...process.env, PREVIEW_VARIANT: variant },
     stdio: 'ignore',

@@ -20,7 +20,7 @@ const ok = (name, cond, extra = '') => {
   return cond
 }
 
-const mod = await import('./index.js')
+const mod = await import('../index.js')
 
 let handler = null
 const creds = new Map()
@@ -118,7 +118,7 @@ const chk = await fetch(`${base}/natfrp/api/port/check?port=`)
 ok('空端口检测 → 400', chk.status === 400, `status=${chk.status}`)
 
 // ── 6) 界面层不许把「空端口」渲染成 0 或一个假数字 ──
-const client = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 ok('空端口不当成 0 去比较', /Number\.isInteger\(Number\(st\.gatePort\)\)/.test(client))
 ok('端口输入框没有预设数字占位', !/placeholder: '3083'/.test(client))
 ok('状态栏对空端口有专门文案', /端口未设置/.test(client))

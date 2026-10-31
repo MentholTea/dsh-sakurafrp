@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { archKey, pickAsset, installFrpc, checkInstalled, isSakuraFrpc } from './installer.mjs'
+import { archKey, pickAsset, installFrpc, checkInstalled, isSakuraFrpc } from './../installer.mjs'
 
 // ── 1) 平台映射 ──
 rec('win32+x64 → windows_amd64', archKey('win32', 'x64') === 'windows_amd64', archKey('win32', 'x64'))

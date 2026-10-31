@@ -22,7 +22,7 @@ const rec = (name, cond, extra = '') => {
 
 // ---------- 1) displayPath ----------
 {
-  const { displayPath } = await import('./paths.mjs')
+  const { displayPath } = await import('../paths.mjs')
   const home = join(homedir(), '.dsh')
   const cross = 'D:\\tools\\frpc.exe'
   const d = displayPath(cross, home)
@@ -37,7 +37,7 @@ const rec = (name, cond, extra = '') => {
 
 // ---------- 2) frpc 互踢判定 ----------
 {
-  const { createFrpcManager } = await import('./frpc.mjs')
+  const { createFrpcManager } = await import('../frpc.mjs')
 
   const badToken = createFrpcManager({ frpcPath: 'x', getToken: () => 't' })
   for (let i = 0; i < 8; i++) badToken._feed('[E] login to server failed: token invalid')
@@ -57,7 +57,7 @@ writeFileSync(
   JSON.stringify({ enabled: false, tunnelId: '', gatePassword: 'legacy-plain-pass' }),
 )
 
-const mod = await import('./index.js')
+const mod = await import('../index.js')
 let handler = null
 const ctx = {
   logger: () => ({ info: () => {}, warn: () => {}, error: () => {}, log: () => {} }),
@@ -106,7 +106,7 @@ let localSrv = null
   const bootPath = join(home, 'boot.mjs')
   writeFileSync(bootPath, `
 import { createServer } from 'node:http'
-const mod = await import(${JSON.stringify(new URL('./index.js', import.meta.url).href)})
+const mod = await import(${JSON.stringify(new URL('../index.js', import.meta.url).href)})
 let handler = null
 const ctx = {
   logger: () => ({}),
@@ -180,7 +180,7 @@ process.exit(0)
 
 // ---------- 7) 登录后回跳原地址（deep link 不再被丢回首页） ----------
 {
-  const { createPasswordGate } = await import('./gate.mjs')
+  const { createPasswordGate } = await import('../gate.mjs')
   const gate = createPasswordGate({ getPassword: () => 'test-pass' })
 
   const fakeReq = (body, { url, method = 'GET' } = {}) => {
@@ -227,9 +227,9 @@ process.exit(0)
 
 // ---------- 8) 快照脱敏与实名徽标两处小修 ----------
 {
-  const index = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
+  const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
   rec('快照的 tokenFile 走 displayPath 脱敏', /tokenFile: displayPath\(/.test(index))
-  const client = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   rec('实名徽标不再无守卫渲染 Lundefined',
     !new RegExp("\\? '已实名' : `实名 L").test(client) && /realnameText/.test(client))
 }

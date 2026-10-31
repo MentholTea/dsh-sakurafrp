@@ -13,9 +13,9 @@ const results = []
 const rec = (n, p, d = '') => { results.push(p); console.log(`${p ? 'PASS' : 'FAIL'}  ${n}${d ? ' — ' + d : ''}`) }
 
 import { readFileSync } from 'node:fs'
-const client = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
-const index = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
-const readme = readFileSync(new URL('./README.md', import.meta.url), 'utf8')
+const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
 
 /** 取 Panel() 渲染区（从 return h('div', { style: S.wrap } 起）用于判断视觉顺序 */
 const panelSrc = client.slice(client.indexOf("h('div', { style: S.wrap }"))

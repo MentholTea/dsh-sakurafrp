@@ -32,3 +32,6 @@ desktop.ini
 # 布局预览产物（preview-render.mjs 生成）
 .preview/
 .uninstall-backup/
+
+# 本地临时工作目录（图标 / 截图生成脚本的中间产物）
+.runtmp-*/

@@ -17,7 +17,7 @@ import { createServer } from 'node:http'
 const home = mkdtempSync(join(tmpdir(), 'dsh-cred-test-'))
 process.env.DSH_HOME = home
 
-const mod = await import('./index.js')
+const mod = await import('../index.js')
 
 const results = []
 const ok = (n, c, e = '') => {
@@ -73,7 +73,7 @@ ok('snapshot.tokenConfigured = true（密钥来自凭据库）', state?.tokenCon
 ok('没有出现 no-token 拒绝', !logs.some((l) => l.includes('no-token')))
 
 // 反向验证：凭据库为空时不能假报已配置
-const mod2 = await import('./index.js?empty=1')
+const mod2 = await import('../index.js?empty=1')
 const home2 = mkdtempSync(join(tmpdir(), 'dsh-cred-empty-'))
 process.env.DSH_HOME = home2
 let handler2 = null
