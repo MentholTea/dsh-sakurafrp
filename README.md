@@ -1,5 +1,9 @@
 # dsh-sakurafrp
 
+[![CI](https://github.com/MentholTea/dsh-sakurafrp/actions/workflows/ci.yml/badge.svg)](https://github.com/MentholTea/dsh-sakurafrp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-sakurafrp.svg)](https://www.npmjs.com/package/dsh-sakurafrp)
+[![license](https://img.shields.io/npm/l/dsh-sakurafrp.svg)](./LICENSE)
+
 DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**。
 同一台机器上装了本插件后，不需要再开 SakuraLauncher。
 
@@ -9,7 +13,7 @@ DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**
 > Windows + WSL2。请自行审阅源码后再使用；涉及安全敏感场景时请格外谨慎。
 > 代码按 MIT「按原样（AS IS）」提供，不附带任何担保，风险自负。
 >
-> 与「AI 生成即不可靠」无关的部分：**测试是可复核的**。`npm test` 是 22 个套件、597 项
+> 与「AI 生成即不可靠」无关的部分：**测试是可复核的**。`npm test` 是 22 个套件、609 项
 > 全离线的断言，其中 `admin-auth-test.mjs` 专门覆盖网关鉴权（8 种路径花招、WS 同权、
 > 改密后旧 cookie 失效）。数字与结论都能自己跑一遍验证，不必只信这段说明。
 
