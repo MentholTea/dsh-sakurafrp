@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { createClient, ApiError } from './natfrp.mjs'
 import { createFrpcManager } from './frpc.mjs'
 import { createPasswordGate, createGateServer } from './gate.mjs'
-import { installFrpc, checkInstalled } from './installer.mjs'
+import { installFrpc, checkInstalled, fetchClients, pickAsset, extractSakuraVersion, compareFrpcVersion } from './installer.mjs'
 import { resolveDshHome, resolveFrpcPath, displayPath } from './paths.mjs'
 
 export const name = 'natfrp'
@@ -704,6 +704,17 @@ export function apply(ctx, config = {}) {
   let installResult = null
 
   /**
+   * 手动检查更新的节流（用户要求：纯手动 + 防频繁点击）。
+   *
+   * 口径：60 秒内最多查一次。请求没超时（有 cachedResult）时直接回缓存；
+   * 已到期限但上一次还在路上（checkingNow）→ 返回 429 并带上冷却剩余秒数，
+   * 前端据此显示「请不要频繁检查」。
+   * 节流窗口从「上一次请求发起」算起，避免一次 20s 的慢请求刚结束又立刻能点。
+   */
+  const UPDATE_CHECK_COOLDOWN_MS = 60_000
+  let updateCheck = { lastAt: 0, inflight: false, cached: null }
+
+  /**
    * 预检目标目录是否可写。
    * 用户可能把 DSH 装在 Program Files 这类只读位置 → 写 bin/ 会失败。
    * 与其让用户点了按钮才看到 EACCES，不如提前告诉他，并给出手动方案。
@@ -779,6 +790,9 @@ export function apply(ctx, config = {}) {
         homeSource: frpcResolved.homeSource,
         writable: installWritable,
         ...frpcPresence,
+        // 版本栏用短版本号；完整 -V 行在 versionFull（前端悬停提示用）
+        version: frpcShortVersion(),
+        versionFull: frpcPresence?.version ?? '',
         progress: installProgress,
         // acknowledged = 这条结果用户已经看过并关掉了（跨会话有效，见 successAckAt）
         lastResult: installResult
@@ -791,15 +805,21 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  /**
-   * 归类当前 frpc 的问题。
-   * 只有类型变化（例如从「未安装」变成「版本不对」）才算新问题，卡片才会重新出现。
-   */
+  /** 归类当前 frpc 的问题。只有类型变化（例如从「未安装」变成「版本不对」）才算新问题，卡片才会重新出现。 */
   function currentProblemKind() {
     if (installProgress) return 'installing'
     if (!frpcPresence.present) return 'missing'
     if (frpcPresence.ok === false) return 'invalid'
     return 'ok'
+  }
+
+  /**
+   * 面板顶部的 frpc 版本栏要展示「短版本号」（0.51.0-sakura-15.1），
+   * 而不是 -V 的整行输出（含 built/hash，一行放不下）。提取失败退回原始串。
+   */
+  function frpcShortVersion() {
+    const raw = frpcPresence?.version ?? ''
+    return extractSakuraVersion(raw) || raw
   }
 
   /**
@@ -1166,6 +1186,114 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    /**
+     * 手动检查 frpc 更新（用户要求：不做任何自动/后台检查）。
+     *
+     * 流程：本地探测版本 → 拉官方清单拿最新版号 → compareFrpcVersion 比较。
+     * 只有「本地存在且是 sakura 版」才谈得上比较；本地缺失/异常时引导走安装
+     * 卡片而不是更新按钮（更新按钮的前端也只在健康时显示）。
+     *
+     * 节流：60s 内最多一次真实请求；窗口内重复点击返回 429 + retryAfter，
+     * 前端显示「不要频繁检查更新」。
+     */
+    if (path === '/natfrp/api/frpc/update-check' && req.method === 'GET') {
+      const now = Date.now()
+      const since = now - updateCheck.lastAt
+      if (updateCheck.inflight) {
+        // 上一次请求还在路上：这次点击只算「催」，不算「查」
+        json(res, 429, {
+          error: 'throttled',
+          throttled: true,
+          message: '正在检查更新，请稍等…',
+          retryAfter: Math.max(1, Math.ceil((UPDATE_CHECK_COOLDOWN_MS - since) / 1000)),
+        })
+        return true
+      }
+      if (since < UPDATE_CHECK_COOLDOWN_MS) {
+        /**
+         * 冷却期内重复点击：一律标记 throttled 并把剩余秒数带回去。
+         *
+         * ⚠️ 有缓存时仍返回 200 + 上次结论（结果本身还有效，没必要让用户看不到），
+         *    但必须带上 throttled 标记 —— 用户的要求是「频繁按要提醒」，
+         *    只静默复用缓存等于点了没反应，用户会以为按钮坏了继续猛点。
+         *    前端据 throttled 单独渲染提醒，结论文字照常显示。
+         */
+        const retryAfter = Math.max(1, Math.ceil((UPDATE_CHECK_COOLDOWN_MS - since) / 1000))
+        if (updateCheck.cached) {
+          json(res, 200, {
+            ...updateCheck.cached,
+            cached: true,
+            throttled: true,
+            retryAfter,
+            checkedAgoSec: Math.ceil(since / 1000),
+          })
+          return true
+        }
+        json(res, 429, {
+          error: 'throttled',
+          throttled: true,
+          message: '检查太频繁了，请稍后再试（官方接口也要省着用）',
+          retryAfter,
+        })
+        return true
+      }
+
+      updateCheck.inflight = true
+      updateCheck.lastAt = now
+      let result
+      try {
+        // 本地状态先现探一次（不用缓存：用户可能刚手动换过文件）。
+        // 走 refreshFrpcPresence 而不是裸 checkInstalled：顺带同步 installWritable，
+        // 避免「一边探测了一边还挂着旧的可写性结论」。
+        const local = await refreshFrpcPresence()
+        if (!local.present) {
+          result = { ok: false, reason: 'not-installed', message: '本地没有 frpc，请先安装' }
+        } else if (local.ok === false) {
+          result = { ok: false, reason: 'invalid', message: `本地 frpc 不可用：${local.error ?? '版本不符'}` }
+        } else {
+          const clients = await fetchClients()
+          // 守卫：确认官方为本平台提供了下载项。没有下载项就没资格说「有新版本」——
+          // 否则界面亮出更新按钮，点了却装不上。不支持的平台在这里抛错进 catch。
+          pickAsset(clients)
+          const current = extractSakuraVersion(local.version ?? '')
+          const latest = String(clients.frpc?.ver ?? '')
+          const cmp = compareFrpcVersion(current, latest)
+          if (!current) {
+            // 本地是 sakura 版但版本串提取失败：无法比较，如实说
+            result = {
+              ok: true, updateAvailable: null, current: null, latest,
+              message: `无法解析本地版本（${local.version ?? '未知'}），官方最新为 ${latest}`,
+            }
+          } else if (cmp === null) {
+            result = {
+              ok: true, updateAvailable: null, current, latest,
+              message: `无法比较版本：本地 ${current}，官方 ${latest}`,
+            }
+          } else {
+            const updateAvailable = cmp < 0
+            result = {
+              ok: true,
+              updateAvailable,
+              current,
+              latest,
+              message: updateAvailable
+                ? `有新版本：${current} → ${latest}`
+                : cmp === 0 ? `已是最新版本（${latest}）` : `本地版本（${current}）比官方（${latest}）更新`,
+            }
+          }
+        }
+      } catch (e) {
+        result = { ok: false, reason: 'network', message: `检查更新失败：${String(e?.message ?? e)}` }
+      } finally {
+        updateCheck.inflight = false
+        // 失败结果不缓存：网络抖动一次不该把冷却期也吞掉——但节流照常生效，
+        // 失败后 60s 内再点还是会被拦（防的是「连点」，不是「重试一次」）。
+        updateCheck.cached = result?.ok === true ? result : null
+      }
+      json(res, result?.ok === false && result?.reason === 'not-installed' ? 400 : 200, result)
+      return true
+    }
+
     // 叉掉提示：记住「这个问题已被忽略」，问题类型或路径变化后会自动重新出现
     if (path === '/natfrp/api/frpc/dismiss' && req.method === 'POST') {
       const kind = currentProblemKind()
@@ -1214,6 +1342,17 @@ export function apply(ctx, config = {}) {
       installing = true
       installProgress = { phase: 'checking', received: 0, total: 0 }
       installResult = null
+      /**
+       * 更新替换的关键前置：Windows 上正在运行的 exe 无法被覆盖（EPERM/EBUSY），
+       * 但 frpc.stop() 是同步杀进程 —— 立即改名仍可能撞上句柄未释放。
+       * 所以即使停了，installer 落盘失败也能靠 backup 回滚保住旧文件。
+       * 这里记录「安装前 frpc 是否在跑」，成功/失败后按它决定要不要拉起来。
+       */
+      const wasRunning = frpc.snapshot().running
+      if (wasRunning) {
+        frpc.stop()
+        logInfo('natfrp: frpc 正在运行，已先停止（更新完成后会自动恢复）')
+      }
       logInfo('natfrp: 开始一键安装 frpc')
 
       // 异步执行，路由立刻返回，前端轮询 /state 看进度
@@ -1234,7 +1373,8 @@ export function apply(ctx, config = {}) {
             installResult = {
               at: Date.now(),
               ok: true,
-              version: result.version,
+              // 成功卡同样显示短版本号（-V 整行含 built/hash 太长）
+              version: extractSakuraVersion(result.version) || result.version,
               bytes: result.bytes,
             }
             // 装成功说明「未安装 / 不可用」这个问题已经解决了，把针对同一路径的
@@ -1254,12 +1394,19 @@ export function apply(ctx, config = {}) {
               ok: false,
               error: result.error || '未知错误',
             }
+            /**
+             * 失败也要恢复原运行状态：更新把正在跑的 frpc 停了，回滚后旧文件
+             * 还在且是好的（installer 已恢复 backup），不拉起来 = 「更新失败，
+             * 隧道也断了」—— 用户看到的是故障扩大，而不是一个简单的失败提示。
+             */
+            if (wasRunning && enabled) void startAll('frpc install failed, restore')
           }
         } catch (err) {
           const msg = String(err?.message ?? err)
           logInfo(`natfrp: frpc 安装异常 - ${msg}`)
           await refreshFrpcPresence()
           installResult = { at: Date.now(), ok: false, error: msg }
+          if (wasRunning && enabled) void startAll('frpc install failed, restore')
         } finally {
           installProgress = null
           installing = false

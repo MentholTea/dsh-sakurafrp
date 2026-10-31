@@ -152,6 +152,56 @@ export function probeVersion(binPath, { timeoutMs = 15000 } = {}) {
 }
 
 /**
+ * 从 `frpc -V` 的完整输出中提取版本号（形如 "0.51.0-sakura-15.1"）。
+ * 真实输出形如：
+ *   0.51.0-sakura-15.1 (built: 2026-10-24 02:32) cbfb558
+ * 与 isSakuraFrpc 用同一套「版本号 + -sakura + 编号」判定口径，保证
+ * 「判定合格」的输出一定能提取出版本。提取失败返回 ''。
+ */
+export function extractSakuraVersion(versionOutput) {
+  const m = String(versionOutput ?? '').match(/\b(\d+\.\d+(?:\.\d+)?-sakura(?:-\d+(?:\.\d+)?)?)\b/i)
+  return m ? m[1] : ''
+}
+
+/**
+ * 比较两个 SakuraFrp 版本号：返回 -1（a 旧）/ 0（相同）/ 1（a 新）；
+ * 任何一个解析失败返回 null —— 调用方只能当作「无法判断」，绝不能当成「相同」。
+ *
+ * 版本形如 0.51.0-sakura-15.1：先比语义化主版本（major.minor.patch，
+ * 缺 patch 段按 0 补齐），主版本相同时再比 -sakura-<构建号>（构建号可能是
+ * 15.1 这类小数）；带 -sakura 的视为比不带的更新（0.51.0-sakura > 0.51.0）。
+ */
+export function compareFrpcVersion(a, b) {
+  const parse = (v) => {
+    const raw = String(v ?? '').trim().toLowerCase()
+    const m = raw.match(/^(\d+)\.(\d+)(?:\.(\d+))?(?:-sakura(?:-(\d+)(?:\.(\d+))?)?)?$/)
+    if (!m) return null
+    return {
+      major: Number(m[1]),
+      minor: Number(m[2]),
+      patch: m[3] === undefined ? 0 : Number(m[3]),
+      // ⚠️ 不能用 m[4] 判断 hasSakura：它是「构建号」捕获组，0.51.0-sakura
+      //    （有 -sakura 无构建号）时 m[4] 是 undefined，会被误判成不带 sakura。
+      //    正则已锚定整串，匹配成功后 -sakura 只可能出现在预期位置。
+      hasSakura: raw.includes('-sakura'),
+      build: m[4] === undefined ? 0 : Number(m[4]),
+      buildMinor: m[5] === undefined ? 0 : Number(m[5]),
+    }
+  }
+  const pa = parse(a)
+  const pb = parse(b)
+  if (!pa || !pb) return null
+  if (pa.major !== pb.major) return pa.major < pb.major ? -1 : 1
+  if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1
+  if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1
+  // 主版本相同：有 -sakura-<构建号> 的比没有的更新
+  if (pa.hasSakura !== pb.hasSakura) return pa.hasSakura ? 1 : -1
+  if (pa.build !== pb.build) return pa.build < pb.build ? -1 : 1
+  if (pa.buildMinor !== pb.buildMinor) return pa.buildMinor < pb.buildMinor ? -1 : 1
+  return 0
+}
+
+/**
  * 完整安装流程：查清单 → 选平台 → 下载 → 校验 MD5 → 原子落盘 → 探版本。
  * @returns {{ok:boolean, version?:string, path?:string, error?:string, bytes?:number}}
  */

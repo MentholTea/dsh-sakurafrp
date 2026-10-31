@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { archKey, pickAsset, installFrpc, checkInstalled, isSakuraFrpc } from './../installer.mjs'
+import { archKey, pickAsset, installFrpc, checkInstalled, isSakuraFrpc, extractSakuraVersion, compareFrpcVersion } from './../installer.mjs'
 
 // ── 1) 平台映射 ──
 rec('win32+x64 → windows_amd64', archKey('win32', 'x64') === 'windows_amd64', archKey('win32', 'x64'))
@@ -174,6 +174,31 @@ function mockFetch({ clients = fakeClients, body = payload, md5Override = null, 
   })
   rec('进度回调被调用', events.length > 0, `${events.length} 次`)
   rec('进度含 received/total', events[0] && 'received' in events[0] && 'total' in events[0])
+}
+
+// ── 5) 版本提取 ──
+{
+  const full = '0.51.0-sakura-15.1 (built: 2026-10-24 02:32) cbfb558'
+  rec('完整 -V 输出提取版本', extractSakuraVersion(full) === '0.51.0-sakura-15.1', extractSakuraVersion(full))
+  rec('无构建号变体提取', extractSakuraVersion('0.51.0-sakura') === '0.51.0-sakura')
+  rec('裸版本号不匹配 sakura 串返回空', extractSakuraVersion('0.62.0') === '')
+  rec('空串返回空', extractSakuraVersion('') === '')
+  rec('null 返回空', extractSakuraVersion(null) === '')
+  rec('not-sakura 返回空（回归）', extractSakuraVersion('not-sakura') === '')
+}
+
+// ── 6) 版本比较 ──
+{
+  rec('构建号更大 → 有更新', compareFrpcVersion('0.51.0-sakura-15.1', '0.51.0-sakura-16.0') === -1)
+  rec('构建号相同 → 无更新', compareFrpcVersion('0.51.0-sakura-15.1', '0.51.0-sakura-15.1') === 0)
+  rec('小数构建号比较', compareFrpcVersion('0.51.0-sakura-15.1', '0.51.0-sakura-15.2') === -1)
+  rec('主版本更新 → 有更新', compareFrpcVersion('0.51.0-sakura-15.1', '0.52.0-sakura-1.0') === -1)
+  rec('本地比官方新', compareFrpcVersion('0.53.0-sakura-1.0', '0.52.0-sakura-9.9') === 1)
+  rec('带 -sakura 比不带新', compareFrpcVersion('0.51.0-sakura', '0.51.0') === 1)
+  rec('缺 patch 段按 0 补齐', compareFrpcVersion('0.51-sakura-1', '0.51.0-sakura-1') === 0)
+  rec('解析失败返回 null（不冒充相同）', compareFrpcVersion('garbage', '0.51.0-sakura-15.1') === null)
+  rec('null 入参返回 null', compareFrpcVersion(null, '0.51.0-sakura-15.1') === null)
+  rec('两边都解析失败也返回 null', compareFrpcVersion('', '') === null)
 }
 
 rmSync(sandbox, { recursive: true, force: true })
