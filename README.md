@@ -22,10 +22,17 @@ DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**
 
 **0. 装插件**
 
+推荐用 Release 里的预构建包——**不经过 npm，不需要本地构建，一条命令即可**：
+
 ```powershell
-dsh plugin --profile desktop add dsh-sakurafrp -w
+dsh plugin --profile desktop add https://github.com/MentholTea/dsh-sakurafrp/releases/latest/download/dsh-sakurafrp.tgz -w
 # web / CLI 场景把 --profile 换成你的 profile 名，例如 --profile web
 ```
+
+> **为什么默认给这条，而不是 `dsh plugin add dsh-sakurafrp`？**
+> 那个 npm 包名目前没有可用版本（同名包此前撤下过）。
+> 如果你执行 npm 版本看到 `ERR_PNPM_NO_VERSIONS`，说明还没重新发布，
+> 用上面这条 tarball 命令即可，功能完全一样。
 
 重启 DSH。若设置页提示未装 frpc，点一次「一键安装」——插件会按平台/架构自动下载。
 
