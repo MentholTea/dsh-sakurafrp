@@ -27,13 +27,13 @@ dsh plugin --profile desktop add dsh-sakurafrp -w
 # web / CLI 场景把 --profile 换成你的 profile 名，例如 --profile web
 ```
 
-> **装不上就换这条**（不经过 npm，直接取 GitHub Release 的预构建包）：
+> **备选：从 Release tarball 装**（不走 npm，取 GitHub 预构建包，同样是这个版本）：
 >
 > ```powershell
 > dsh plugin --profile desktop add https://github.com/MentholTea/dsh-sakurafrp/releases/latest/download/dsh-sakurafrp.tgz -w
 > ```
 >
-> 两条命令装的是同一个版本，功能完全一样。
+> 任一条装不上就换另一条。
 
 重启 DSH。若设置页提示未装 frpc，点一次「一键安装」——插件会按平台/架构自动下载。
 
