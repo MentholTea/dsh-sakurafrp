@@ -277,23 +277,20 @@ if (-not $NoPush) {
     Write-Step "建 GitHub Release $tagName"
 
     $notesFile = Join-Path $repoRoot "docs/release-notes/$tagName.md"
-    $useAutoNotes = $false
+
+    # 正文来源优先级：-Notes 参数 > docs/release-notes/vX.Y.Z.md > 自动生成
+    # -Notes 直接传给 gh，不落盘，避免发布后在工作区留下未提交文件。
+    $relArgs = @('release', 'create', $tagName, $tgzPath, '--title', $tagName)
 
     if ($Notes) {
-        $Notes | Out-File -FilePath $notesFile -Encoding utf8 -NoNewline
-        Write-Info "用 -Notes 参数作为正文"
+        $relArgs += @('--notes', $Notes)
+        Write-Info '用 -Notes 参数作为正文'
     } elseif (Test-Path $notesFile) {
+        $relArgs += @('--notes-file', $notesFile)
         Write-Info "用 $notesFile 作为正文"
     } else {
-        $useAutoNotes = $true
-        Write-Info '没有正文来源，改用 gh 自动生成'
-    }
-
-    $relArgs = @('release', 'create', $tagName, $tgzPath, '--title', $tagName)
-    if ($useAutoNotes) {
         $relArgs += '--generate-notes'
-    } else {
-        $relArgs += @('--notes-file', $notesFile)
+        Write-Info '没有正文来源，改用 gh 自动生成'
     }
 
     & gh @relArgs
@@ -306,11 +303,12 @@ if (-not $NoPush) {
 Write-Step '切回 develop'
 Invoke-Git switch develop | Out-Null
 
-# 若 master 比 develop 多了提交（hotfix 场景），提示合并
-$ahead = & git rev-list --count develop..master
+# 只有 hotfix 场景才会出现「master 上有 develop 没有的实际提交」。
+# 刚合并完时 master 必然多一个合并提交，那个不算，要排除掉。
+$ahead = & git rev-list --count --no-merges develop..master
 if ([int]$ahead -gt 0) {
-    Write-Warn2 "master 比 develop 多 $ahead 个提交（合并点或 hotfix）。"
-    Write-Info '如需让 develop 同步 master 的修复，执行：git merge master'
+    Write-Warn2 "master 上有 $ahead 个提交不在 develop 中（hotfix 遗留）。"
+    Write-Info '如不需要，执行 git merge master 让 develop 跟上；需要保留则忽略此提示。'
 }
 
 # ---------------------------------------------------------------- 完成
