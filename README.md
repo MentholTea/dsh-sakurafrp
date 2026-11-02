@@ -347,7 +347,8 @@ $env:NATFRP_TOKEN='你的密钥'; node test/verify.mjs
 - 界面文案目前只有中文（硬编码在 `client.js` 里）。`locale/*.json` **只提供
   `meta.title` / `meta.description`**，供插件管理器与设置页显示插件名与描述；
   界面内的按钮、提示、错误文案不走 i18n，英文环境看到的仍是中文
-- 免费档：2 隧道 / 20 GB 每月 / 10 Mbps
+- 免费档：2 隧道 / 每月 5 GB 流量（可结转）/ 10 Mbps 限速；额度用完后可通过每日签到
+  或购买流量套餐提升，不会因为偶尔跑满就长期卡住
 - API 写操作（edit/delete/create）走官方 OpenAPI，但官方对滥用有风控，别高频调用
 
 ---
