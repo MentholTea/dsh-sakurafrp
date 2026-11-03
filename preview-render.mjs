@@ -67,6 +67,9 @@ const VARIANT = process.env.PREVIEW_VARIANT ?? 'ready'
 const isCreate = VARIANT === 'create'
 const isFresh = VARIANT === 'fresh'
 const isNoPort = VARIANT === 'noport'
+// 视口宽度：默认 560（历史值，桌面走查基准）。
+// 传 390 之类就按手机宽度渲染，用来走查窄屏媒体查询是否真的生效。
+const VIEWPORT = Number(process.env.PREVIEW_WIDTH) > 0 ? Number(process.env.PREVIEW_WIDTH) : 560
 
 const SNAPSHOT = isFresh
   ? {
@@ -133,10 +136,19 @@ globalThis.window = {
   addEventListener() {}, removeEventListener() {},
   open() {}, matchMedia: () => ({ matches: false, addEventListener() {} }),
 }
+// 被插件注入的 <style> 文本：收集起来塞进预览页，否则走查时根本看不到媒体查询的效果
+const injectedStyles = []
 globalThis.document = {
   querySelector: () => null,
-  createElement: () => ({ style: {}, classList: { add() {}, remove() {} }, appendChild() {}, setAttribute() {} }),
-  head: { appendChild() {} },
+  createElement: () => ({
+    style: {}, dataset: {}, textContent: '', classList: { add() {}, remove() {} },
+    appendChild() {}, setAttribute() {},
+  }),
+  head: {
+    appendChild(el) {
+      if (el && typeof el.textContent === 'string' && el.textContent) injectedStyles.push(el.textContent)
+    },
+  },
   body: { dataset: {}, appendChild() {}, classList: { add() {}, remove() {} } },
   addEventListener() {}, removeEventListener() {},
 }
@@ -227,6 +239,14 @@ function renderNode(node) {
   if (props.type) attrs.push(`type="${esc(props.type)}"`)
   if (props.value !== undefined && props.value !== '') attrs.push(`value="${esc(props.value)}"`)
   if (props.href) attrs.push(`href="#"`)
+  // className / data-* 是窄屏媒体查询的锚点，必须原样落到 DOM 上，
+  // 否则预览页里 @media 规则一条都命中不了，走查等于自欺欺人。
+  if (props.className) attrs.push(`class="${esc(props.className)}"`)
+  for (const [k, v] of Object.entries(props)) {
+    if (k.startsWith('data-') && v !== undefined && v !== null && v !== false) {
+      attrs.push(`${k}="${esc(v)}"`)
+    }
+  }
   attrs.push(`style="${css(props.style)}"`)
   const inner = children.map(renderNode).join('')
   if (type === 'input') return `<input ${attrs.join(' ')}>`
@@ -272,8 +292,13 @@ async function renderPanel() {
 
 const body = await renderPanel()
 
+// 插件注入的样式（窄屏媒体查询在其中）必须一起进预览页，
+// 否则把浏览器窗口拉窄后看到的还是桌面布局，走查不出任何东西。
+const pluginCss = injectedStyles.join('\n')
+
 const page = `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>内网穿透设置面板 · 布局预览</title>
 <style>
   :root { color-scheme: light; }
@@ -282,14 +307,17 @@ const page = `<!DOCTYPE html>
     font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
     color: #1f2328; font-size: 13px;
   }
-  .frame { width: 560px; margin: 0 auto; background: #fff; border-radius: 12px;
+  /* 宽度跟着视口走：把窗口拉窄到 390 左右就直接看到手机版布局。
+     上界仍是 560，保持桌面走查的基准宽度不变。 */
+  .frame { width: 100%; max-width: ${VIEWPORT}px; margin: 0 auto; background: #fff; border-radius: 12px;
     box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 4px 20px 20px; }
   h1 { font: 600 14px/1.4 inherit; margin: 0 0 12px; }
   a { color: #4f6ef7; text-decoration: none; }
   input, select { font: inherit; color: inherit; }
   * { box-sizing: border-box; }
   #metrics { position: absolute; left: -9999px; }
-</style></head>
+</style>
+${pluginCss ? `<style id="plugin-css">\n${pluginCss}\n</style>` : ''}</head>
 <body>
   <div id="metrics">HEIGHT=0</div>
   <div class="frame">

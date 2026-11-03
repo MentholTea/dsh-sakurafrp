@@ -29,8 +29,10 @@ rec('有 showTunnel / showPort / showPassword 三个派生条件',
   && /const showPassword = showPort && portReady/.test(client))
 
 rec('② 隧道只在有密钥时渲染', /showTunnel \? h\('div', \{\}/.test(client))
-rec('③ 本机端口只在选了隧道后渲染', /showPort \? h\('div', \{ style: S\.field \}/.test(client))
-rec('④ 访问密码只在端口可用后渲染', /showPassword \? h\('div', \{ style: S\.field \}/.test(client))
+// ③④ 的显示条件才是本条要验证的东西；属性列后面还挂了 className（窄屏适配），
+// 所以这里允许 style 之后还有别的属性再闭合括号。
+rec('③ 本机端口只在选了隧道后渲染', /showPort \? h\('div', \{ style: S\.field[,}]/.test(client))
+rec('④ 访问密码只在端口可用后渲染', /showPassword \? h\('div', \{ style: S\.field[,}]/.test(client))
 
 rec('端口「可用」= 检测通过 或 网关已在监听',
   /const portReady = portOk \|\| Boolean\(gatePortNum && st\.gateRunning\)/.test(client))
@@ -48,8 +50,11 @@ rec('没隧道时提示「选一条或新建」', /选一条隧道，或者点�
 rec('有隧道没端口时提示「填端口」', /填个本机端口，确认可用后才会出现最后一步。/.test(client))
 
 // ── 3) ① 行：获取密钥左移 + 行尾保存 ──
+// ① 行的定位：允许 style 后面再挂别的属性（窄屏适配加了 className: 'natfrp-field'），
+// 断言关心的是「这一块从哪开始」，不是属性列表长得一模一样。
+const tokenStart = client.search(/h\('div', \{ style: S\.field,[\s\S]{0,120}?h\('div', \{ style: S\.flabel, title: 'SakuraFrp 管理面板/)
 const tokenBlock = client.slice(
-  client.indexOf("h('div', { style: S.field },\n          h('div', { style: S.flabel, title: 'SakuraFrp 管理面板"),
+  tokenStart,
   client.indexOf('// ── ② 隧道 ──'),
 )
 rec('① 块能定位到', tokenBlock.length > 200, `${tokenBlock.length} 字符`)
