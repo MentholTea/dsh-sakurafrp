@@ -1121,6 +1121,49 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * 删除当前选中的隧道。
+       *
+       * 删除不可恢复，而且会带走公网入口 —— 必须二次确认，并说清删的是哪条。
+       * 服务端返回 wasCurrent：删的是当前隧道时，插件会同时停 frpc、清 tunnelId、
+       * 把开关落回关闭（否则开关还亮着，实际却没有任何公网入口）。
+       */
+      const doDeleteTunnel = async () => {
+        const id = String(st?.tunnelId ?? '')
+        if (!id || busy) return
+        const t = tunnels?.find((x) => String(x.id) === id)
+        const label = t ? `${t.name} · ${t.nodeName}` : `隧道 ${id}`
+        const remote = t?.remote !== undefined && t?.remote !== null && String(t.remote)
+          ? `\n公网入口：${t.remote}`
+          : ''
+        const ok = typeof window === 'undefined' || window.confirm(
+          `删除隧道「${label}」？${remote}\n\n`
+          + '删除不可恢复，公网入口会立刻失效。\n'
+          + '如果只是想换端口或节点，请改设置，不要删隧道。')
+        if (!ok) return
+
+        setBusy(true); setErr('')
+        try {
+          const s = await post('/tunnel/delete', { id: Number(id) })
+          if (!mounted.current) return
+          setSt(s)
+          // 先把本地列表里的那一条摘掉，别等 /tunnels 回来才消失（中间会闪一下）
+          setTunnels((prev) => (Array.isArray(prev) ? prev.filter((x) => String(x.id) !== id) : prev))
+          diagStore.setEnabled(s.enabled !== false)
+          diagStore.kick()
+          setSyncMsg(s.wasCurrent
+            ? `✓ 已删除隧道「${t?.name ?? id}」，公网访问已停止；需要时新建或选择一条隧道，再打开开关`
+            : `✓ 已删除隧道「${t?.name ?? id}」`)
+          flash(setSaved, '已删除')
+          // 下拉列表里不能还留着刚删掉的那条
+          void loadExtra()
+        } catch (e) {
+          if (mounted.current) setErr(`删除失败：${e.message || e}`)
+        } finally {
+          if (mounted.current) setBusy(false)
+        }
+      }
+
       const doToggle = async (v) => {
         setBusy(true)
         try {
@@ -1587,7 +1630,22 @@ window.__ModuleLoader__.load({
                 onClick: () => {
                   if (newOpen) { setNewOpen(false); setCreateErr('') } else void openCreate()
                 },
-              }, newOpen ? '取消' : st.tunnelId ? '＋ 新建' : '新建'))),
+              }, newOpen ? '取消' : st.tunnelId ? '＋ 新建' : '新建'),
+              // 只在选中了隧道、且没在展开新建表单时出现：
+              // 删除对象必须是「当前这条」，没得删时摆一个灰按钮只会让人误点。
+              st.tunnelId && !newOpen
+                ? h('button', {
+                  type: 'button',
+                  title: '从 SakuraFrp 面板永久删除当前选中的这条隧道',
+                  style: {
+                    ...S.btnGhost, flex: 'none', fontSize: '12px', padding: '4px 9px',
+                    color: 'var(--dsw-alias-state-error-primary, #dc2626)',
+                    borderColor: 'var(--dsw-alias-state-error-primary, #dc2626)',
+                  },
+                  disabled: busy,
+                  onClick: () => void doDeleteTunnel(),
+                }, '删除隧道')
+                : null)),
 
           // ── 新建隧道（内联表单，不跳页面）──
           // 只建 TCP：不用域名、不用配解析，远程端口官方自动分配。

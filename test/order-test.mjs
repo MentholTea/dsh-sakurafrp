@@ -7,6 +7,7 @@
 //   4. 「访问密钥最后面要有清除按钮 / 附近要获取密钥」
 //   5. 「隧道名称最后的『离线』删掉，没啥用」
 //   6. 「选节点时在后方显示空闲状态，并用颜色」
+//   7. 「增加删除隧道的功能」→ 只删当前选中那条，删前必须二次确认
 //
 // 这类问题不会被语法错误或单元测试抓到，只能对源码做结构断言。
 const results = []
@@ -134,6 +135,22 @@ rec('README 不再叫「一键对齐」', !/一键对齐/.test(readme))
 
 // ── 13) 刷新列表按钮去掉，改为选中/新建时自动刷新 ──
 rec('隧道区不再有「刷新列表」按钮', !/刷新列表/.test(client))
+
+// ── 14) 删除隧道：只对当前选中的那条出现，且删前二次确认 ──
+rec('删除按钮只在选中隧道且未展开新建表单时出现',
+  /st\.tunnelId && !newOpen[\s\S]{0,700}?'删除隧道'/.test(client))
+rec('删除前弹确认框，并说明不可恢复',
+  /window\.confirm\([\s\S]{0,400}?删除不可恢复/.test(client))
+rec('删除走 POST /tunnel/delete 且只传 id',
+  /post\('\/tunnel\/delete', \{ id: Number\(id\) \}\)/.test(client))
+rec('删除的是当前隧道时提示公网访问已停止',
+  /s\.wasCurrent[\s\S]{0,400}?公网访问已停止/.test(client))
+rec('后端路由校验 id 并调用官方 tunnelDelete',
+  /\/natfrp\/api\/tunnel\/delete[\s\S]{0,1200}?api\.tunnelDelete\(\[id\]\)/.test(index))
+rec('后端把 failed 当「已删但没踢下线」而不是删除失败',
+  /failed 不是「删除失败」/.test(index))
+rec('删除当前隧道后清空 tunnelId 并关闭开关',
+  /wasCurrent[\s\S]{0,300}?enabled = false[\s\S]{0,120}?tunnelId = ''/.test(index))
 
 const passed = results.filter(Boolean).length
 console.log(`\n${passed}/${results.length} passed`)

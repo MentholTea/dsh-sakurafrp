@@ -1133,6 +1133,80 @@ export function apply(ctx, config = {}) {
       return true
     }
 
+    /**
+     * 删除隧道。
+     *
+     * 官方契约（OpenAPI /tunnel/delete，200）：
+     *   { deleted: number[], failed: number[] }
+     * ⚠️ failed 不是「删除失败」，而是「已经删掉了、但没把在线的 frpc 踢下线」。
+     *    所以判断成功只看 deleted 里有没有这个 id；failed 只意味着我们这边
+     *    必须自己把 frpc 停掉，否则它会拿着一条不存在的隧道反复重连。
+     *
+     * 删掉的正好是当前隧道时，本地状态必须一起清：
+     *   tunnelId 指到已不存在的隧道 → frpc 永远连不上；
+     *   enabled 还留着 true → 侧边栏显示「开着」，但实际没有任何公网入口。
+     * 因此顺序是：先删远端，成功后才停 frpc、清 tunnelId、把开关落到关闭。
+     * 远端失败时本地什么都不动，用户还能重试。
+     */
+    if (path === '/natfrp/api/tunnel/delete' && req.method === 'POST') {
+      const token = await resolveToken()
+      const api = apiOrNull(token)
+      if (!api) { json(res, 400, { error: 'no-token' }); return true }
+      const raw = await readBody(req)
+      let patch
+      try { patch = JSON.parse(raw || '{}') } catch { json(res, 400, { error: 'invalid-json' }); return true }
+
+      const id = Number(patch.id)
+      if (!Number.isInteger(id) || id <= 0) {
+        json(res, 400, { error: 'bad-id', message: '隧道 ID 不对' })
+        return true
+      }
+
+      try {
+        const r = await api.tunnelDelete([id])
+        noteApiOk()
+        const deleted = (Array.isArray(r?.deleted) ? r.deleted : []).map(Number)
+        const failed = (Array.isArray(r?.failed) ? r.failed : []).map(Number)
+        if (!deleted.includes(id)) {
+          logWarn(`natfrp: 删除隧道 ${id} 未生效（deleted=${JSON.stringify(deleted)} failed=${JSON.stringify(failed)}）`)
+          json(res, 502, {
+            error: 'delete-failed',
+            message: '官方没有删掉这条隧道（可能已经不存在，或不属于当前账号）',
+          })
+          return true
+        }
+        if (failed.includes(id)) {
+          // 删除成功但服务端没踢下线：本地必须停 frpc，不能让它继续挂着
+          logWarn(`natfrp: 隧道 ${id} 已删除，但官方未能把它踢下线；本地停 frpc`)
+        }
+
+        const wasCurrent = String(id) === tunnelId
+        if (wasCurrent) {
+          frpc.stop()
+          enabled = false
+          tunnelId = ''
+          lastTunnelInfo = null
+          writeState({ enabled, tunnelId, gatePort })
+        }
+        logInfo(`natfrp: 已删除隧道 ${id}${wasCurrent ? '（当前隧道，公网访问已停止）' : ''}`)
+
+        json(res, 200, {
+          ok: true,
+          id,
+          deleted,
+          failed,
+          wasCurrent,
+          ...(await snapshot(originOf(req))),
+        })
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : String(e?.message ?? e)
+        lastApiError = msg
+        logWarn(`natfrp: 删除隧道 ${id} 失败: ${msg}`)
+        json(res, 502, { error: 'api-failed', message: msg })
+      }
+      return true
+    }
+
     if (path === '/natfrp/api/user' && req.method === 'GET') {
       const token = await resolveToken()
       const api = apiOrNull(token)
