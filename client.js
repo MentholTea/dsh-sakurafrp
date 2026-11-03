@@ -263,8 +263,6 @@ window.__ModuleLoader__.load({
     function Toggle({ on, onChange, disabled }) {
       return h('button', {
         type: 'button', style: { ...S.sw(on), opacity: disabled ? 0.5 : 1 },
-        // natfrp-toggle 只给窄屏 CSS 用（放大到 44px 触控目标），不影响桌面样式
-        className: 'natfrp-toggle',
         'aria-pressed': on, disabled, onClick: () => !disabled && onChange(!on),
       }, h('span', { style: S.knob(on) }))
     }
@@ -930,9 +928,6 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         mounted.current = true
-        // 窄屏样式在这里也注入一次：设置页是直接挂 Panel（外面没有 NatfrpMainPanel），
-        // 只在主面板注入的话，从设置页进入时手机版布局不会生效。
-        ensurePanelCss()
         void loadState()
         const t = setInterval(() => void loadState(), 4000)
         return () => { mounted.current = false; clearInterval(t) }
@@ -1275,7 +1270,7 @@ window.__ModuleLoader__.load({
 
       if (!st) {
         const firstErr = err || pollErr
-        return h('div', { style: S.wrap, 'data-natfrp-panel': '1' }, firstErr
+        return h('div', { style: S.wrap }, firstErr
           ? h('div', { style: S.err }, `读取状态失败：${firstErr}`)
           : h('div', { style: S.hint }, '加载中…'))
       }
@@ -1343,7 +1338,7 @@ window.__ModuleLoader__.load({
             ? '填个本机端口，确认可用后才会出现最后一步。'
             : ''
 
-      return h('div', { style: S.wrap, 'data-natfrp-panel': '1' },
+      return h('div', { style: S.wrap },
         // ── frpc 缺失时的安装引导（置顶，最显眼）──
         h(FrpcInstallCard, { inst: st.frpcInstall, onDone: () => void loadState() }),
 
@@ -1351,10 +1346,9 @@ window.__ModuleLoader__.load({
         h(FrpcVersionBar, { inst: st.frpcInstall, onDone: () => void loadState() }),
 
         // ── 总开关 + 运行状态（原来三行标题，现在并成一行）──
-        h('div', { style: S.row, className: 'natfrp-status-row' },
+        h('div', { style: S.row },
           h('div', {
             style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flexWrap: 'wrap' },
-            className: 'natfrp-status-main',
             // 原来挂在标题下的那句说明，收进悬停提示：信息还在，但不占一行
             title: '关闭后立即断开公网连接，DSH 重启也不再连；本机端口与密码设置都会保留。',
           },
@@ -1427,11 +1421,10 @@ window.__ModuleLoader__.load({
 
         // 流量条：百分比紧贴条尾，一眼看到「还剩多少」
         user
-          ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' }, className: 'natfrp-traffic' },
+          ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
             h('span', {
               style: { ...S.label, fontSize: '12px', fontWeight: 500, flex: 'none', maxWidth: '46%',
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-              className: 'natfrp-traffic-name',
               title: `${user.name} · ${user.speed}`,
             },
               realnameText
@@ -1475,7 +1468,7 @@ window.__ModuleLoader__.load({
         // ① 访问密钥：「获取密钥」紧跟输入框（它解释的就是这个框从哪来）。
         //    保存做成输入框内嵌按钮 —— 贴在框里右上角，粘完密钥手不用离开输入区；
         //    而且只有框里真有东西时才出现，空框上挂个「保存」纯属噪音。
-        h('div', { style: S.field, className: 'natfrp-field' },
+        h('div', { style: S.field },
           h('div', { style: S.flabel, title: 'SakuraFrp 管理面板 → 用户信息 → 查看访问密钥' },
             '① SakuraFrp 访问密钥'),
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap' } },
@@ -1492,8 +1485,6 @@ window.__ModuleLoader__.load({
                 ? h('button', {
                   type: 'button',
                   title: '保存密钥并加载隧道',
-                  // natfrp-inline-btn：绝对定位在输入框内，窄屏下不跟着放大
-                  className: 'natfrp-inline-btn',
                   style: {
                     position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)',
                     padding: '2px 7px', fontSize: '11px', lineHeight: 1.5,
@@ -1534,7 +1525,7 @@ window.__ModuleLoader__.load({
         showTunnel ? h('div', {},
           // 用和 ①③④ 一样的 grid 版式，标签与下拉框的列位置对齐，
           // 别用 space-between —— 那会让下拉框被推到最右边，和上一行错开一截
-          h('div', { style: S.field, className: 'natfrp-field' },
+          h('div', { style: S.field },
             h('div', { style: S.flabel }, '② 隧道'),
             h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 } },
               tunnels && tunnels.length
@@ -1712,7 +1703,7 @@ window.__ModuleLoader__.load({
 
         // ③ 本机端口：选了隧道才出现（端口就是往这条隧道里送的，没隧道时填它没意义）。
         //    填完就查一次能不能用；改它会把隧道里的端口一起改掉。
-        showPort ? h('div', { style: S.field, className: 'natfrp-field' },
+        showPort ? h('div', { style: S.field },
           h('div', {
             style: S.flabel,
             title: '穿透流量从这个端口进出。改这里会同时把 SakuraFrp 面板里这条隧道的「本地端口」改成一样的数。',
@@ -1745,7 +1736,7 @@ window.__ModuleLoader__.load({
         // ④ 访问密码：等端口确认可用才出现。
         //    到这里才是「能被外网访问了」，此时设密码才有对象可言；
         //    前面几步还没成型就先摆一个密码框，只会让人以为非填不可。
-        showPassword ? h('div', { style: S.field, className: 'natfrp-field' },
+        showPassword ? h('div', { style: S.field },
           h('div', {
             style: S.flabel,
             title: '建议 20 位以上随机串。没密码时外网一律打不开（防止 DSH 被别人白用）。',
@@ -1936,123 +1927,6 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
       document.head.appendChild(tag)
     }
 
-    // ── 面板窄屏适配（纯 CSS，桌面端零影响）──
-    //
-    // 为什么用 CSS 而不是在 JS 里 matchMedia 切两套 style：
-    //   面板里的间距/尺寸全写在 inline style 上，JS 路线要给每处样式写两份，
-    //   而且 resize 要触发整树重渲染。CSS 媒体查询只维护一份，宿主换宽度时
-    //   浏览器自己重算，插件一行 JavaScript 都不用跑。
-    //
-    // 为什么必须 !important：inline style 的优先级高于外部样式表，
-    //   不加重音符号这条规则一条都盖不住。
-    //
-    // 定位靠 [data-natfrp-panel] / .natfrp-* 这两类自己写的标记，
-    // 不碰 DSH 的构建哈希类名 —— 宿主升级不会让这些选择器失效。
-    const PANEL_CSS_ID = 'dsh-sakurafrp/panel-responsive.css'
-    // 模块级标记做双保险：querySelector 在某些宿主 / 预览桩里可能查不到已插入的节点，
-    // 只靠它判断会重复插 <style>（同一个 id 的样式表叠多份，白白多占内存）。
-    let panelCssDone = false
-
-    function ensurePanelCss() {
-      if (typeof document === 'undefined') return
-      if (panelCssDone) return
-      if (document.querySelector(`style[data-plugin-css="${PANEL_CSS_ID}"]`) !== null) {
-        panelCssDone = true
-        return
-      }
-      const css = `
-/* 断点 640px：窄屏手机横竖屏大致都在 360–430；640 同时覆盖窄窗口的桌面浏览器。
-   桌面端（> 640px）一个字都不改。 */
-@media (max-width: 640px) {
-  /* ── 字段行：138px 标签列 + 控件 → 上下两段 ──
-     360px 屏上原来右列只剩约 190px，20 位密码连看都看不全。 */
-  .natfrp-field {
-    grid-template-columns: minmax(0, 1fr) !important;
-    align-items: stretch !important;
-    gap: 4px !important;
-  }
-
-  /* ── 触控目标 ≥ 44px ──
-     原按钮 padding 5px 13px 实测约 26px 高，手指点偏概率很高。
-     输入框顺带把字号提到 16px：低于 16px 时 iOS Safari 聚焦会自动放大整页。
-     ⚠️ :not(.natfrp-toggle) 是必须的：总开关自己也 <button>，
-        被这条规则顶到 44px 高后会变成竖椭圆（滑块本体的尺寸在下面单独定）。 */
-  [data-natfrp-panel] button:not(.natfrp-toggle) {
-    min-height: 44px !important;
-    padding-left: 14px !important;
-    padding-right: 14px !important;
-    font-size: 14px !important;
-  }
-  [data-natfrp-panel] input,
-  [data-natfrp-panel] select {
-    min-height: 44px !important;
-    padding-top: 10px !important;
-    padding-bottom: 10px !important;
-    font-size: 16px !important;
-  }
-
-  /* 例外：绝对定位在输入框内部的小按钮（① 里的「保存」）。
-     它靠 top:50% + translateY 居中，撑到 44px 会直接溢出输入框。 */
-  [data-natfrp-panel] .natfrp-inline-btn {
-    min-height: 0 !important;
-    padding: 4px 10px !important;
-    font-size: 12px !important;
-  }
-
-  /* ── 总开关：40×22 的滑块手指够不到，放大到 56×32 ──
-     ⚠️ 必须显式 min-height/padding，否则会被上面那条「所有 button ≥44px」
-        的规则顶成方块（min-height 优先于 height，padding 也会撑宽）。
-     滑块的 left 由 inline style 按 on/off 各写死一个值，所以两边都要覆盖。 */
-  [data-natfrp-panel] .natfrp-toggle {
-    width: 56px !important;
-    height: 32px !important;
-    min-height: 32px !important;
-    padding: 0 !important;
-    border-radius: 16px !important;
-  }
-  [data-natfrp-panel] .natfrp-toggle > span {
-    top: 3px !important;
-    width: 26px !important;
-    height: 26px !important;
-  }
-  [data-natfrp-panel] .natfrp-toggle[aria-pressed="true"] > span { left: 27px !important; }
-  [data-natfrp-panel] .natfrp-toggle[aria-pressed="false"] > span { left: 3px !important; }
-
-  /* ── 状态行：标题 + 版本 + 两个徽标 + 开关，窄屏一行放不下 ──
-     重排成两行：第一行「内网穿透 · 版本 · 开关」，第二行两个状态徽标。
-     做法是把左块设成 display:contents —— 它自己不参与布局，
-     里面的标题/版本/徽标直接升格为父容器的 flex item，于是能用 order 重排，
-     不必改 JSX 结构、桌面端（媒体查询外）完全不受影响。 */
-  .natfrp-status-row { flex-wrap: wrap !important; row-gap: 6px !important; }
-  .natfrp-status-main { display: contents !important; }
-  .natfrp-status-main > :nth-child(1) { order: 1; }
-  .natfrp-status-main > :nth-child(2) { order: 2; }
-  .natfrp-status-main > :nth-child(n+3) { order: 4; }
-  .natfrp-status-row > .natfrp-toggle { order: 3; margin-left: auto !important; flex: 0 0 auto !important; }
-
-  /* ── 流量条：账号名(≤46%) + 条 + 百分比三段挤一行 ──
-     改成账号名独占一行，条和百分比留在第二行。 */
-  .natfrp-traffic { flex-wrap: wrap !important; row-gap: 6px !important; }
-  .natfrp-traffic-name { flex: 1 1 100% !important; max-width: 100% !important; }
-
-  /* ── 主面板滚动层：24px 左右留白在 390px 屏上占掉 12%，收窄 ── */
-  .natfrp-scroll {
-    padding-left: 14px !important;
-    padding-right: 14px !important;
-  }
-
-  /* ── 日志：220px 固定高在手机上已近半屏，改按视口高度给 ── */
-  [data-natfrp-panel] pre { max-height: 45vh !important; }
-}
-`.trim()
-      const tag = document.createElement('style')
-      tag.dataset.plugin = 'dsh-sakurafrp'
-      tag.dataset.pluginCss = PANEL_CSS_ID
-      tag.textContent = css
-      document.head.appendChild(tag)
-      panelCssDone = true
-    }
-
     // 把状态写到 document.body（而不是行元素）：
     // React 每次重渲染会重建行上的 ARIA / class，外部塞的 dataset 不保证存活；
     // body 上的属性由本插件独占命名空间，不会与宿主冲突，且 CSS 可稳定继承。
@@ -2209,10 +2083,6 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
     //   内层：flex:1 + overflow-y:auto            ← 真正滚动的那一层
     // 少了 min-height:0，flex 子项的最小高度会取内容高度，overflow 永远不触发。
     function NatfrpMainPanel() {
-      // 窄屏适配样式在这里注入：Panel 组件每次挂载都会跑，
-      // 但注入本身有幂等判断，重复调用不会再插一条 <style>。
-      useEffect(() => { ensurePanelCss() }, [])
-
       return h('div', {
         style: {
           height: '100%',
@@ -2223,8 +2093,6 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
           overflow: 'hidden',
         },
         'data-plugin': 'natfrp',
-        // 窄屏 CSS 的锚点：不依赖 DSH 的构建哈希类名
-        'data-natfrp-panel': '1',
       },
         h('div', {
           style: {
@@ -2238,7 +2106,6 @@ body[data-natfrp-mode="narrow"] button[aria-label="内网穿透"] > .natfrp-swit
             // 给滚动条末端留出安全距离，避免最后一行贴着窗口底边
             paddingBottom: 'calc(24px + 8px)',
           },
-          className: 'natfrp-scroll',
         }, h(Panel)))
     }
 

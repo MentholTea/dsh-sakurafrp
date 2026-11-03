@@ -17,13 +17,8 @@ const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
 const index = readFileSync(new URL('../index.js', import.meta.url), 'utf8')
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
 
-/**
- * 取 Panel() 渲染区（从 return h('div', { style: S.wrap } 起）用于判断视觉顺序。
- * 起点允许带额外属性（比如窄屏适配加的 data-natfrp-panel），
- * 否则每加一个属性这条定位就断一次 —— 断言关心的只是「从这里开始」。
- */
-const wrapAt = client.search(/h\('div', \{ style: S\.wrap[,}]/)
-const panelSrc = wrapAt >= 0 ? client.slice(wrapAt) : ''
+/** 取 Panel() 渲染区（从 return h('div', { style: S.wrap } 起）用于判断视觉顺序 */
+const panelSrc = client.slice(client.indexOf("h('div', { style: S.wrap }"))
 const pos = (needle) => panelSrc.indexOf(needle)
 
 // ── 1) 填写顺序：密钥 → 隧道 → 端口 → 密码 → 保存 ──
