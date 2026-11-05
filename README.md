@@ -269,6 +269,81 @@ POST /natfrp/api/frpc/ack-result   确认安装结果提示（落盘，跨会话
 「绑定证书」指向子域绑定页，「绑定教程」指向官方文档。
 （「不」不带链接——连成一片蓝色会读成「不去绑定证书」，意思正好反了。）
 
+### 手机端登录后白屏、只有桌宠、侧边栏一滑就收回（2026-11-05 定位，真机修复）
+
+**白屏的真因不是遮罩，是主内容宽度被算成 0。** 真机（Xiaomi 2509FPN0BC / Android 17 / Edge Beta 157）实测：
+
+```
+UA           : Mozilla/5.0 (X11; Linux x86_64) ... Edg/157    ← 开了「桌面版网站」
+innerWidth   : 980      visualViewport.scale : 0.408
+computed     : grid-template-columns = "980px 0px 0px"
+centerCol    : x=980 w=0        an3WzG_root : x=980 w=0
+DOM          : bodyLen=10978、mask=false、__DSH_BOOT_READY__=object
+```
+
+DOM 完全正常、插件全部加载、桌宠照常绘制（它是 `position:fixed` + `z-index:214748`，不受网格影响）——
+**只有主内容那两列宽度是 0**，所以看起来就是白屏。
+
+源头是 `dsh-web-mobile` 的移动端样式：
+
+```css
+@media (max-width:1023px) and (pointer:coarse){
+  html [data-mobile-nav="frame"]{ grid-template-columns: minmax(0,1fr) 0 0 !important }
+}
+```
+
+它假设「主内容在第 1 列」，但 DSH 新版把三列定成
+`sidebarCol grid-area:1/1 | centerCol grid-area:1/2 | rightbarCol grid-area:1/3`。
+于是那个 `1fr` 全被分给侧栏列，第 2 列（主内容）被压成 `0px`。
+触发键是 `pointer: coarse`，**手机必现，桌面鼠标(`fine`)不受影响** —— 这也解释了为什么只有手机白屏。
+
+实测确认：摘除这一条声明后立刻恢复
+
+```
+BEFORE: gridCols="980px 0px 0px"   centerW=0
+AFTER : gridCols="56px 924px 0px"  centerW=924
+```
+
+网关现在注入一段幂等脚本（`POLYFILL_HTML` 里 `data-natfrp-gridfix`），**只摘除命中该选择器的那条声明**，
+插件其余样式原样保留；并监听样式重插以保持生效。不改第三方插件文件，重启 DSH 后自动起作用。
+
+| 现象 | 真正的成因 | 处置 |
+|---|---|---|
+| 白屏，但桌宠正常显示 | 移动端样式把 `grid-template-columns` 覆成 `1fr 0 0`，主内容列宽 0（见上） | 网关注入 `data-natfrp-gridfix` 精确摘除该声明；或关掉 Edge「桌面版网站」 |
+| 勾选框点不动 | 须知页单选框仅 13px，低于触摸命中下限；且需先滚到文末 | 网关注入 `@media(max-width:768px)` 把勾选框放大到 24px |
+| 向右滑出侧边栏，立刻自动收回 | 窄视口 DSH 走 drawer：全屏 `drawerMask`（`pointer-events:auto`）带 `onClick → toggleSidebar()`，与 `dsh-web-mobile` 的边缘手势（`START_ZONE_RATIO=0.45`）抢同一次触摸，滑动收尾的合成 click 落到遮罩上就关闭 | 用左上角按钮开关；逐帧拖拽必与遮罩抢事件，属第三方插件与宿主 drawer 的手势冲突 |
+| 「重定向次数过多，清 Cookie」 | DSH 会话 cookie 名绑定 `host:port`，端口一变就对不上；旧逻辑补太多或补太少 | 已修，见下一节 |
+
+真机自检（不需要改任何代码）：
+
+```powershell
+adb forward tcp:9222 localabstract:chrome_devtools_remote
+# 然后在页面控制台看：列宽是否为 0
+# document.querySelector('.mP3x-q_frame').style.gridTemplateColumns
+# getComputedStyle(document.querySelector('.mP3x-q_centerCol')).width
+```
+
+**最快的自救**：Edge 菜单里关掉「桌面版网站」（UA 回到移动版、视口回到设备宽度），或直接重启 DSH 让网关注入的修复脚本生效。
+
+### 「重定向次数过多 / 清 Cookie」的完整成因（已修）
+
+DSH 的会话 cookie 名是 `dsh-auth-<base64url(sha256(host:port))>`，**名字绑定端口**；
+`token` 则是每个进程随机生成。网关在两侧都可能失手：
+
+- **补太多**：浏览器没存住 `dsh-auth-*`（无痕、清理、跨站导航）时，旧实现每轮都补
+  `?token=`，DSH 每轮回 `303 ./` → 浏览器报「重定向次数过多」。删 Cookie 也没用，
+  因为下一轮仍是同样路径。
+- **补太少**：DSH 重启换了端口，旧 cookie 名字对不上，而旧实现「看到 `dsh-auth-*`
+  就不补 token」，于是永久 401 —— 只能手动删 Cookie。
+
+现在两者都有确定行为（`test/gate-redirect-test.mjs` 锁死）：
+
+1. 补发过一次就种 `natfrp_tok`（600s），此后**不再补**，从源头断掉 303 循环；
+2. 同一路径连续补发超过 2 次仍未拿到页面 → 判定浏览器存不住 cookie，
+   **停下来给出明确说明页**，而不是继续重定向；
+3. 上游 401 且没有补发标记 → 清掉失效的 `dsh-auth-*` 并重新走一次 token（`natfrp_heal`
+   只允许自愈一次，防止变成另一种循环）。
+
 ---
 
 ## 验证
@@ -277,7 +352,7 @@ POST /natfrp/api/frpc/ack-result   确认安装结果提示（落盘，跨会话
 也是拿一个临时 `DSH_HOME` 跑冷启动）。
 
 ```powershell
-npm test                 # 23 个套件、643 项，串行跑并汇总
+npm test                 # 24 个套件、655 项，串行跑并汇总
 npm test -- path         # 只跑名字含关键字的套件
 ```
 
