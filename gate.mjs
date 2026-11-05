@@ -9,6 +9,11 @@
 //
 // 非安全上下文 polyfill：http:// 或自签 https 下浏览器缺 crypto.randomUUID
 // 与 AbortSignal.any，DSH 前端会初始化抛错白屏，注入补丁。
+//
+// 手机端可操作性补丁（2026-11-05 实测）：窄视口下点按类控件必须 ≥24px，
+// 否则 iOS/Android 会判定点不中。第三方插件里 13px 的单选框正是这种情况，
+// 用户点不动就无法确认，只能卡在弹窗上。这里只把可点尺寸补到 24px，
+// 不改任何插件行为与判定义务。
 
 import { createServer, request as httpRequest } from 'node:http'
 import { createGzip } from 'node:zlib'
@@ -19,6 +24,69 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 export const POLYFILL_HTML = [
   `<script data-natfrp-polyfill="1">!function(){try{if(self.crypto&&!self.crypto.randomUUID){self.crypto.randomUUID=function(){var b=new Uint8Array(16);self.crypto.getRandomValues(b);b[6]=b[6]&15|64;b[8]=b[8]&63|128;var h="";for(var i=0;i<16;i++){var x=b[i].toString(16);h+=(x.length<2?"0":"")+x;if(i===3||i===5||i===7||i===9)h+="-";}return h;}}}catch(e){}}();</script>`,
   `<script data-natfrp-polyfill="2">!function(){try{if(typeof AbortSignal!=='undefined'&&typeof AbortSignal.any!=='function'){AbortSignal.any=function(signals){var c=new AbortController();var arr=Array.prototype.slice.call(signals||[]);function done(){try{c.abort()}catch(e){}}for(var i=0;i<arr.length;i++){var s=arr[i];if(!s)continue;if(s.aborted){done();break;}try{s.addEventListener('abort',done,{once:true});}catch(e){}}return c.signal;};}}catch(e){}}();</script>`,
+  /* 窄视口点按命中率：勾选框/单选框放大到 24px 的可点区域。 */
+  `<style data-natfrp-touch="1">@media (max-width:768px){input[type=checkbox],input[type=radio]{min-width:24px;min-height:24px;width:24px;height:24px;flex:none}}</style>`,
+  /*
+   * 修复「手机（或桌面版网站）白屏、只显示桌宠」—— 2026-11-05 真机 Edge 157 实测根因：
+   *
+   *   dsh-web-mobile 的移动端样式里有
+   *     @media (max-width:1023px) and (pointer:coarse){
+   *       html [data-mobile-nav="frame"]{ grid-template-columns: minmax(0,1fr) 0 0 !important }
+   *     }
+   *   它假设「主内容在第 1 列」。DSH 新版的列定义是
+   *     sidebarCol grid-area:1/1 | centerCol grid-area:1/2 | rightbarCol grid-area:1/3
+   *   于是那个 1fr 全被分给侧栏列，第 2 列（主内容）被压成 0px。实测：
+   *     computed gridCols = "980px 0px 0px"，centerCol / mainPanel 宽度 = 0 → 就是白屏。
+   *   桌宠是 position:fixed + z-index 214748，不受网格影响照常绘制 —— 与「只有桌宠」吻合。
+   *   触发条件是 pointer:coarse，手机必现；桌面鼠标(pointer:fine)不受影响。
+   *
+   * 为什么不靠再写一条 CSS 覆盖：两边都用 !important 时只剩特异性内战，
+   * 插件一旦改选择器就会静默失效。这里改成**精确摘除**那条声明（实测有效：
+   * 移除后 gridCols 从 "980px 0px 0px" 恢复为 "56px 924px 0px"），
+   * 并监听样式重插以保持幂等。只动这一条选择器命中的规则，插件其余样式原样保留。
+   */
+  `<script data-natfrp-gridfix="1">!function(){
+  function fix(){
+    var removed=0;
+    var sheets=Array.from(document.styleSheets||[]);
+    for(var i=0;i<sheets.length;i++){
+      var rules; try{ rules=sheets[i].cssRules }catch(e){ continue }
+      if(!rules) continue;
+      /* 递归扫描：规则组可能嵌在 @media / @supports / @layer 任意层级，
+         只按「选择器命中 + grid-template-columns 的值形态」判定，不依赖外层结构。 */
+      (function scan(list){
+        for(var j=list.length-1;j>=0;j--){
+          var r=list[j];
+          if(!r) continue;
+          if(r.cssRules && r.selectorText===undefined){ scan(r.cssRules); continue }
+          if(!r.selectorText||!r.style) continue;
+          var gtc=r.style.getPropertyValue('grid-template-columns');
+          if(!gtc) continue;
+          if(r.selectorText.indexOf('[data-mobile-nav="frame"]')<0) continue;
+          var v=gtc.replace(/\\s+/g,' ');
+          /* 只有这一种形态是错的：把 1fr 全给第 1 列、第 2 列压成 0。 */
+          if(!/^minmax\\(0(px)?, 1fr\\) 0(px)? 0(px)?$/.test(v)) continue;
+          try{
+            var parent=r.parentRule;
+            if(parent&&parent.deleteRule) parent.deleteRule(j);
+            else if(list.deleteRule) list.deleteRule(j);
+            removed++;
+          }catch(e){}
+        }
+      })(rules);
+    }
+    return removed;
+  }
+  function boot(){
+    fix();
+    /* 插件或 DSH 可能在稍后重新插入该样式表：低频合并触发，不做高频抖动。 */
+    var t=null;
+    var obs=new MutationObserver(function(){ if(t) return; t=setTimeout(function(){ t=null; fix() },120) });
+    try{ obs.observe(document.documentElement,{childList:true,subtree:true}) }catch(e){}
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot,{once:true});
+  else boot();
+}();</script>`,
 ].join('')
 
 // ---------------- 工具 ----------------
@@ -70,6 +138,21 @@ function isHtmlNav(req) {
 
 function isCompressed(headers) {
   return /(^|,\s*)(gzip|br|deflate)(\s*,|$)/i.test(String(headers['content-encoding'] ?? ''))
+}
+
+/**
+ * 追加一条 set-cookie，且不覆盖上游已有的 set-cookie。
+ *
+ * ⚠️ 代理层最容易丢 cookie 的写法就是 `resHeaders['set-cookie'] = x`：
+ *    upstream 的 dsh-auth-* 与我们的标记 cookie 是两条独立指令，必须并存。
+ *    node 的 res.writeHead 接受数组，上游给的也可能已经是数组。
+ */
+function appendSetCookie(headers, value) {
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === 'set-cookie') ?? 'set-cookie'
+  const prev = headers[key]
+  if (prev === undefined) headers[key] = [value]
+  else if (Array.isArray(prev)) headers[key] = [...prev, value]
+  else headers[key] = [String(prev), value]
 }
 
 // ---------------- 密码门 ----------------
@@ -379,25 +462,140 @@ export function createGateServer({
    */
   const DSH_AUTH_COOKIE_RE = /(?:^|;\s*)dsh-auth(?:-[A-Za-z0-9_-]{43})?=/
 
+  /** 任意 dsh-auth-* cookie 的完整匹配（用于失效清理，含任意长度的后缀）。 */
+  const DSH_AUTH_ANY_RE = /(?:^|;\s*)(dsh-auth(?:-[A-Za-z0-9_-]*)?)=/g
+
   function hasDshAuthCookie(cookieHeader) {
     return DSH_AUTH_COOKIE_RE.test(String(cookieHeader ?? ''))
   }
 
+  /**
+   * 「本进程已经补发过一次 launchToken」的浏览器侧标记。
+   *
+   * ⚠️ 为什么不能只靠 dsh-auth-* 判断：DSH 的会话 cookie 名是
+   *    `dsh-auth-<base64url(sha256(authority))>`，authority 是 **host:port**。
+   *    DSH 的 webServer.port 默认由端口分配决定，桌面端重启后端口会变
+   *    （实测 45871 一类随机值），名字随之改变；上游是否认账根本无法由
+   *    网关侧的正则判断。旧实现「看到 dsh-auth-* 就不补 token」一旦遇到
+   *    端口漂移，就永远不会补 token，用户只能删 Cookie 重来。
+   *
+   *    反过来只看「没 cookie 就补 token」也不行：浏览器只要有一次没存住
+   *    cookie（隐私模式、被清理、跨站导航），每一次 303 都会再补一次 token，
+   *    DSH 每次回 303 ./，浏览器就报「重定向次数过多」。
+   *
+   *    所以补与不补由网关自己的短命 cookie 记录，进可自愈、退不循环。
+   */
+  const TOKEN_MARK = 'natfrp_tok'
+  const TOKEN_MARK_MAX_AGE = 600
+
+  /** 该请求是否已经由本网关补发过 launchToken。 */
+  function hasTokenMark(cookieHeader) {
+    const cookies = parseCookies(cookieHeader)
+    return Boolean(cookies[TOKEN_MARK])
+  }
+
+  /** 生成 set-cookie 的值：种标记 / 清标记 / 清所有 dsh-auth-*。 */
+  function markCookie() {
+    return `${TOKEN_MARK}=1; Path=/; Max-Age=${TOKEN_MARK_MAX_AGE}; HttpOnly; SameSite=Lax`
+  }
+  function clearMarkCookie() {
+    return `${TOKEN_MARK}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`
+  }
+
+  /**
+   * 与 cookie 存储无关的兜底：同一路径连续补发 N 次 token 仍未拿到页面，
+   * 说明浏览器**根本存不住 cookie**（隐私模式 / 禁用第三方 / 无痕导航等）。
+   *
+   * 此时任何「继续补 token」都只会得到 303 → 303 → …，也就是用户看到的
+   * 「重定向次数过多」。正确的行为是停下来明确告诉他原因，而不是无限重定向。
+   */
+  const MAX_INJECT_STREAK = 2
+  const injectStreak = new Map()
+
+  function noteInject(pathname) {
+    const rec = injectStreak.get(pathname) ?? { count: 0, at: 0 }
+    rec.count += 1
+    rec.at = Date.now()
+    injectStreak.set(pathname, rec)
+    return rec.count
+  }
+
+  function clearInjectStreak(pathname) {
+    injectStreak.delete(pathname)
+  }
+
+  function cookieBlockedPageHtml() {
+    return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>浏览器没有保存登录 Cookie</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:#0f1117;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.card{background:#171a23;border:1px solid #262b38;border-radius:14px;padding:28px 24px;
+  max-width:400px;width:calc(100% - 44px);box-shadow:0 8px 32px rgba(0,0,0,.4)}
+h1{font-size:16px;margin:0 0 12px;font-weight:600;color:#e7eaf2}
+p{font-size:13px;color:#9aa2b6;line-height:1.8;margin:0 0 10px}
+ul{font-size:13px;color:#9aa2b6;line-height:1.8;margin:0 0 14px;padding-left:18px}
+code{background:#10131b;border:1px solid #2c3345;border-radius:5px;padding:1px 6px;
+  font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#c9d1e6}
+a.btn{display:inline-block;margin-top:6px;padding:10px 16px;background:#5b7cfa;color:#fff;
+  border-radius:9px;text-decoration:none;font-size:14px}
+</style></head><body>
+<div class="card">
+  <h1>浏览器没有保存登录 Cookie</h1>
+  <p>网关已经连续两次为你的浏览器换取 DSH 会话，但浏览器没有保存收到的 Cookie，
+  因此每次回到首页都要重新验证 —— 浏览器会因此提示「重定向次数过多」。</p>
+  <ul>
+    <li>退出浏览器的<b>无痕 / 隐私模式</b>后重试</li>
+    <li>检查是否<b>禁用了 Cookie</b>（尤其 iOS 的「阻止所有 Cookie」）</li>
+    <li>确认本站不是被「跨站跟踪防护」拦截的第三方上下文</li>
+    <li>换用系统浏览器或桌面端打开同一地址</li>
+  </ul>
+  <p>处理完上面的设置后点下方重新进入即可，不需要清空任何数据。</p>
+  <a class="btn" href="/">重新进入</a>
+</div></body></html>`
+  }
+  function clearDshAuthCookies(cookieHeader) {
+    const names = []
+    for (const m of String(cookieHeader ?? '').matchAll(DSH_AUTH_ANY_RE)) {
+      if (m[1]) names.push(m[1])
+    }
+    return names.map((n) => `${n}=; Path=/; Max-Age=0`)
+  }
+
+  /** 返回 { path, needsMark } —— needsMark 表示这次补了 token，需要种标记。 */
   function withLaunchToken(reqUrl, cookieHeader) {
     const token = String(launchToken?.() ?? '')
-    if (!token) return reqUrl
-    // 已持有 DSH 会话 cookie：不要再塞 token。
-    // DSH 的 authorizeIndex 见到 ?token= 会先尝试「token 换 cookie」，
-    // 已经换过的人再被塞一次 token，就会多绕一轮 303。
-    if (hasDshAuthCookie(cookieHeader)) return reqUrl
+    if (!token) return { path: reqUrl, needsMark: false }
+    // 已经补过一次：绝不再补。这是杀掉 303 死循环的唯一可靠依据。
+    if (hasTokenMark(cookieHeader)) return { path: reqUrl, needsMark: false }
+    // 已持有 DSH 会话 cookie：先不补，交给上游判定；上游若 401 会自愈。
+    if (hasDshAuthCookie(cookieHeader)) return { path: reqUrl, needsMark: false }
     try {
       const u = new URL(reqUrl, 'http://127.0.0.1')
-      if (u.searchParams.has('token')) return reqUrl
+      if (u.searchParams.has('token')) return { path: reqUrl, needsMark: false }
       u.searchParams.set('token', token)
-      return `${u.pathname}${u.search}`
+      return { path: `${u.pathname}${u.search}`, needsMark: true }
     } catch {
-      return reqUrl
+      return { path: reqUrl, needsMark: false }
     }
+  }
+
+  /**
+   * 上游 401 的自愈判定。
+   *
+   * 触发条件：上游拒绝了本次 HTML 导航，且这次请求**没有带我们补的 token**
+   * （带 token 仍 401 说明 token 本身失效，再补也没用，直接透传）。
+   * 处理：清掉所有 dsh-auth-* 与补发标记，303 回原地址 → 下一轮重新补 token。
+   * 自愈只允许一次，否则端口/凭据真坏时会变成另一种重定向循环。
+   */
+  const HEAL_COOKIE = 'natfrp_heal'
+
+  function healCount(cookieHeader) {
+    const v = parseCookies(cookieHeader)[HEAL_COOKIE]
+    const n = Number(v)
+    return Number.isFinite(n) && n > 0 ? n : 0
   }
 
   function rewriteHeaders(raw, method, wantPlain) {
@@ -450,9 +648,9 @@ export function createGateServer({
     }
     const wantInject = Boolean(injectHtml) && req.method === 'GET' && isHtmlNav(req)
     const headers = rewriteHeaders(req.headers, req.method, wantInject)
-    const path = wantInject
+    const { path, needsMark } = wantInject
       ? withLaunchToken(req.url, req.headers.cookie)
-      : req.url
+      : { path: req.url, needsMark: false }
 
     const proxyReq = httpRequest(
       { host: upstream.host, port: targetPort, method: req.method, path, headers },
@@ -461,6 +659,59 @@ export function createGateServer({
         const resHeaders = { ...proxyRes.headers }
         const ct = String(resHeaders['content-type'] ?? '')
         const shouldInject = wantInject && ct.includes('text/html') && !isCompressed(resHeaders)
+
+        // 补发过 token 就记一笔，之后本进程内不再重复补 → 根治 303 死循环。
+        if (needsMark) {
+          appendSetCookie(resHeaders, markCookie())
+          const pathname = (() => {
+            try { return new URL(req.url ?? '/', 'http://127.0.0.1').pathname } catch { return '/' }
+          })()
+          const streak = noteInject(pathname)
+          /**
+           * 兜底：连续补发仍未收敛，说明浏览器存不住 cookie。
+           * 此时继续重定向只会变成「重定向次数过多」——停下来给明确说明。
+           */
+          if (streak > MAX_INJECT_STREAK) {
+            res.writeHead(200, {
+              'content-type': 'text/html; charset=utf-8',
+              'cache-control': 'no-store',
+              'referrer-policy': 'no-referrer',
+              'set-cookie': [clearMarkCookie()],
+            })
+            res.end(cookieBlockedPageHtml())
+            clearInjectStreak(pathname)
+            log(`gate: ${pathname} 连续 ${streak} 次补发 token 未收敛 → 提示 Cookie 未保存`)
+            return
+          }
+        }
+        // 拿到页面就重置计数，正常用户永远不会触发上面的兜底
+        if (shouldInject || status === 200) {
+          try { clearInjectStreak(new URL(req.url ?? '/', 'http://127.0.0.1').pathname) } catch { /* noop */ }
+        }
+
+        /**
+         * 上游 401 自愈：DSH 的会话 cookie 名绑定 host:port，端口一变旧 cookie
+         * 就永远对不上，而网关此前看到 `dsh-auth-*` 就不再补 token —— 用户
+         * 只能「删 Cookie」重来。这里主动清掉旧 cookie 并重新走一次 token，
+         * 只允许自愈一次，避免变成新的循环。
+         */
+        if (wantInject && status === 401 && !hasTokenMark(req.headers.cookie)) {
+          const healed = healCount(req.headers.cookie)
+          if (healed < 1) {
+            const clears = ['natfrp_heal=' + (healed + 1) + '; Path=/; Max-Age=60; HttpOnly; SameSite=Lax']
+              .concat(clearDshAuthCookies(req.headers.cookie))
+            res.writeHead(303, {
+              location: req.url === '/' ? './' : req.url,
+              'cache-control': 'no-store',
+              'set-cookie': clears,
+              'referrer-policy': 'no-referrer',
+            })
+            res.end()
+            log(`gate: 上游 401 → 清理失效的 dsh-auth 并重试一次 (${req.url})`)
+            return
+          }
+          log(`gate: 上游 401 且已自愈过一次 → 透传（可能是 token 失效）`)
+        }
 
         if (!shouldInject) {
           res.writeHead(status, resHeaders)
@@ -480,6 +731,8 @@ export function createGateServer({
           delete resHeaders['content-encoding']
           resHeaders['content-type'] = 'text/html; charset=utf-8'
 
+          // ⚠️ 上游可能同时下发 dsh-auth-* 会话 cookie，必须在改完头之后重新写入，
+          //    否则这份 HTML 重写会把会话 cookie 一起吞掉（表现为登录后立刻 401）。
           const accept = String(req.headers['accept-encoding'] ?? '')
           if (buf.length > 4096 && /\bgzip\b/.test(accept)) {
             resHeaders['content-encoding'] = 'gzip'
