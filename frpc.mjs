@@ -33,12 +33,25 @@ export function createFrpcManager({
   let kickSuspect = false
   let authFailLoggedAt = 0 // 「登录失败」日志的节流时间戳（与互踢分开计数）
 
+  /**
+   * 日志行的时间戳，固定用**本机本地时间**。
+   * 早前用 toISOString()，输出的是 UTC（带 Z 后缀），比北京时间慢 8 小时，
+   * 对照 frpc 原始输出时对不上号。这里手工拼，不碰 toLocaleString——
+   * 后者依赖 ICU/locale，跨环境（Node 精简构建、不同 locale）格式会漂移。
+   */
+  function stamp() {
+    const d = new Date()
+    const p = (n) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+      `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  }
+
   function pushLine(text) {
     const s = String(text ?? '').replace(/\s+$/, '')
     if (!s) return
     for (const l of s.split(/\r?\n/)) {
       if (!l.trim()) continue
-      lines.push(`[${new Date().toISOString()}] ${l}`)
+      lines.push(`[${stamp()}] ${l}`)
       if (lines.length > maxLogLines) lines.shift()
     }
   }
