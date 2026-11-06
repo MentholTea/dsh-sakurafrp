@@ -179,8 +179,13 @@ window.__ModuleLoader__.load({
       flabel: { fontSize: '12px', fontWeight: 600, lineHeight: 1.35 },
       input: {
         width: '100%', boxSizing: 'border-box', padding: '5px 9px', fontSize: '13px',
-        borderRadius: '6px', border: '1px solid var(--dsw-alias-border-1, #d0d5dd)',
-        background: 'var(--dsw-alias-bg-1, #fff)', color: 'inherit',
+        borderRadius: '6px',
+        // ⚠️ 只能用宿主真实 token：旧写法 --dsw-alias-bg-1 / --dsw-alias-border-1
+        //    在 DSH 里不存在，fallback 永远是 #fff；深色模式文字继承成浅色后
+        //    就成了「白底白字」，输入框里的内容看起来是空的。
+        border: '1px solid var(--dsw-alias-border-l1, #d0d5dd)',
+        background: 'var(--dsw-alias-bg-layer-2, #fff)',
+        color: 'var(--dsw-alias-label-primary, #1f2329)',
       },
       btn: {
         padding: '5px 13px', fontSize: '13px', borderRadius: '6px', cursor: 'pointer',
@@ -188,12 +193,12 @@ window.__ModuleLoader__.load({
       },
       btnGhost: {
         padding: '5px 13px', fontSize: '13px', borderRadius: '6px', cursor: 'pointer',
-        background: 'transparent', color: 'inherit', border: '1px solid var(--dsw-alias-border-1, #d0d5dd)',
+        background: 'transparent', color: 'inherit', border: '1px solid var(--dsw-alias-border-l1, #d0d5dd)',
       },
       sw: (on) => ({
         width: '40px', height: '22px', borderRadius: '11px', cursor: 'pointer', flex: '0 0 auto',
         border: 'none', position: 'relative', transition: 'background .15s',
-        background: on ? '#4f6ef7' : 'var(--dsw-alias-border-2, #c8ccd4)',
+        background: on ? '#4f6ef7' : 'var(--dsw-alias-border-l2, #c8ccd4)',
       }),
       knob: (on) => ({
         position: 'absolute', top: '2px', left: on ? '20px' : '2px',
@@ -212,7 +217,7 @@ window.__ModuleLoader__.load({
       warn: { fontSize: '12px', color: '#d97706', lineHeight: 1.7 },
       err: { fontSize: '12px', color: '#dc2626', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
       ok: { fontSize: '12px', color: '#16a34a' },
-      divider: { height: '1px', background: 'var(--dsw-alias-border-1, #e5e7eb)' },
+      divider: { height: '1px', background: 'var(--dsw-alias-border-l1, #e5e7eb)' },
       code: {
         fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', fontSize: '12px',
         background: 'rgba(127,127,127,.1)', padding: '1px 5px', borderRadius: '4px',
@@ -236,6 +241,22 @@ window.__ModuleLoader__.load({
         transition: 'width .3s, background .3s',
       }),
     }
+
+    /**
+     * 输入框 placeholder 的配色。
+     *
+     * inline style 命中不了 ::placeholder，而浏览器默认的 placeholder 是固定灰
+     * （Chromium 实测 rgb(117,117,117)，不随 color-scheme 变）；深色模式下
+     * 它贴在深色输入框上虽然勉强能看，但比宿主自己的输入框暗一截。
+     * 这里用组件内的 <style> 下发（随 Panel 卸载移除），作用域限定在本插件
+     * 面板的 data 属性上，不会碰到宿主或其它插件。
+     */
+    const FIELD_CSS = `
+[data-natfrp-panel] input::placeholder {
+  color: var(--dsw-alias-label-secondary, #6b7280);
+  opacity: .8;
+}
+`.trim()
 
     /**
      * 节点「忙不忙」的判定与配色。
@@ -1100,6 +1121,49 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * 删除当前选中的隧道。
+       *
+       * 删除不可恢复，而且会带走公网入口 —— 必须二次确认，并说清删的是哪条。
+       * 服务端返回 wasCurrent：删的是当前隧道时，插件会同时停 frpc、清 tunnelId、
+       * 把开关落回关闭（否则开关还亮着，实际却没有任何公网入口）。
+       */
+      const doDeleteTunnel = async () => {
+        const id = String(st?.tunnelId ?? '')
+        if (!id || busy) return
+        const t = tunnels?.find((x) => String(x.id) === id)
+        const label = t ? `${t.name} · ${t.nodeName}` : `隧道 ${id}`
+        const remote = t?.remote !== undefined && t?.remote !== null && String(t.remote)
+          ? `\n公网入口：${t.remote}`
+          : ''
+        const ok = typeof window === 'undefined' || window.confirm(
+          `删除隧道「${label}」？${remote}\n\n`
+          + '删除不可恢复，公网入口会立刻失效。\n'
+          + '如果只是想换端口或节点，请改设置，不要删隧道。')
+        if (!ok) return
+
+        setBusy(true); setErr('')
+        try {
+          const s = await post('/tunnel/delete', { id: Number(id) })
+          if (!mounted.current) return
+          setSt(s)
+          // 先把本地列表里的那一条摘掉，别等 /tunnels 回来才消失（中间会闪一下）
+          setTunnels((prev) => (Array.isArray(prev) ? prev.filter((x) => String(x.id) !== id) : prev))
+          diagStore.setEnabled(s.enabled !== false)
+          diagStore.kick()
+          setSyncMsg(s.wasCurrent
+            ? `✓ 已删除隧道「${t?.name ?? id}」，公网访问已停止；需要时新建或选择一条隧道，再打开开关`
+            : `✓ 已删除隧道「${t?.name ?? id}」`)
+          flash(setSaved, '已删除')
+          // 下拉列表里不能还留着刚删掉的那条
+          void loadExtra()
+        } catch (e) {
+          if (mounted.current) setErr(`删除失败：${e.message || e}`)
+        } finally {
+          if (mounted.current) setBusy(false)
+        }
+      }
+
       const doToggle = async (v) => {
         setBusy(true)
         try {
@@ -1338,7 +1402,10 @@ window.__ModuleLoader__.load({
             ? '填个本机端口，确认可用后才会出现最后一步。'
             : ''
 
-      return h('div', { style: S.wrap },
+      return h('div', { style: S.wrap, 'data-natfrp-panel': '' },
+        // placeholder 配色跟着主题 token 走（见 FIELD_CSS 注释）
+        h('style', null, FIELD_CSS),
+
         // ── frpc 缺失时的安装引导（置顶，最显眼）──
         h(FrpcInstallCard, { inst: st.frpcInstall, onDone: () => void loadState() }),
 
@@ -1563,7 +1630,22 @@ window.__ModuleLoader__.load({
                 onClick: () => {
                   if (newOpen) { setNewOpen(false); setCreateErr('') } else void openCreate()
                 },
-              }, newOpen ? '取消' : st.tunnelId ? '＋ 新建' : '新建'))),
+              }, newOpen ? '取消' : st.tunnelId ? '＋ 新建' : '新建'),
+              // 只在选中了隧道、且没在展开新建表单时出现：
+              // 删除对象必须是「当前这条」，没得删时摆一个灰按钮只会让人误点。
+              st.tunnelId && !newOpen
+                ? h('button', {
+                  type: 'button',
+                  title: '从 SakuraFrp 面板永久删除当前选中的这条隧道',
+                  style: {
+                    ...S.btnGhost, flex: 'none', fontSize: '12px', padding: '4px 9px',
+                    color: 'var(--dsw-alias-state-error-primary, #dc2626)',
+                    borderColor: 'var(--dsw-alias-state-error-primary, #dc2626)',
+                  },
+                  disabled: busy,
+                  onClick: () => void doDeleteTunnel(),
+                }, '删除隧道')
+                : null)),
 
           // ── 新建隧道（内联表单，不跳页面）──
           // 只建 TCP：不用域名、不用配解析，远程端口官方自动分配。

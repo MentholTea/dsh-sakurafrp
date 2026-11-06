@@ -5,6 +5,7 @@
 //   3) 旧版 state.json 里的明文 gatePassword 迁移后仍留在原处
 //   4) /port/check 接受 80 这类特权端口，与保存时的校验口径不一致
 //   5) 日志时间戳曾用 toISOString() 打 UTC，与用户本机时间差 8 小时
+//   6) 深色模式输入框白底白字（引用了不存在的 --dsw-alias-bg-1 / border-1）
 //
 // 全部离线：只写临时 DSH_HOME。
 
@@ -249,6 +250,28 @@ process.exit(0)
   const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   rec('实名徽标不再无守卫渲染 Lundefined',
     !new RegExp("\\? '已实名' : `实名 L").test(client) && /realnameText/.test(client))
+}
+
+// ---------- 9) 深色模式输入框：只能引用宿主真实 token ----------
+{
+  const client = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  // 旧写法用的 --dsw-alias-bg-1 / --dsw-alias-border-1 在 DSH 里不存在，
+  // fallback 永远是白色，深色模式下就成了白底白字。
+  rec('输入框背景用真实 token --dsw-alias-bg-layer-2',
+    /background: 'var\(--dsw-alias-bg-layer-2,/.test(client))
+  rec('输入框文字用真实 token --dsw-alias-label-primary',
+    /color: 'var\(--dsw-alias-label-primary,/.test(client))
+  rec('不再引用不存在的 --dsw-alias-bg-1',
+    !/var\(--dsw-alias-bg-1,/.test(client))
+  rec('不再引用不存在的 --dsw-alias-border-1',
+    !/var\(--dsw-alias-border-1,/.test(client))
+  rec('不再引用不存在的 --dsw-alias-border-2',
+    !/var\(--dsw-alias-border-2,/.test(client))
+  // placeholder 的配色只能靠选择器（inline style 管不到伪元素），
+  // 且必须限定在本插件面板内，不能污染宿主。
+  rec('placeholder 走面板作用域的样式',
+    /\[data-natfrp-panel\] input::placeholder/.test(client)
+    && /'data-natfrp-panel': ''/.test(client))
 }
 
 console.log(results.join('\n'))

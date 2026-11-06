@@ -119,6 +119,14 @@ r = await fetch(`${GATE}/natfrp/api/config`, {
 const hacked = await json(r)
 rec('未登录改密码 → 401 且不返回快照', r.status === 401 && !hacked.enabled, `status=${r.status}`)
 
+// 破坏性接口同理：删除隧道必须过密码门，未登录连官方接口都不该碰到
+r = await fetch(`${GATE}/natfrp/api/tunnel/delete`, {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 90001 }),
+})
+const delUnauth = await json(r)
+rec('未登录删除隧道 → 401', r.status === 401, `status=${r.status}`)
+rec('未登录删除隧道不返回 deleted 回执', !Array.isArray(delUnauth?.deleted), JSON.stringify(delUnauth))
+
 // 攻击者那一下没生效：原密码仍然能登录
 r = await login(PASSWORD)
 let cookie = cookieOf(r)

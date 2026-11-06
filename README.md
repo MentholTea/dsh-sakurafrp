@@ -13,8 +13,8 @@ DeepSeek Harness 内建的内网穿透面板——**替代 SakuraFrp 启动器**
 > Windows + WSL2。请自行审阅源码后再使用；涉及安全敏感场景时请格外谨慎。
 > 代码按 MIT「按原样（AS IS）」提供，不附带任何担保，风险自负。
 >
-> 与「AI 生成即不可靠」无关的部分：**测试是可复核的**。`npm test` 是 23 个套件、643 项
-> 全离线的断言，其中 `admin-auth-test.mjs` 专门覆盖网关鉴权（8 种路径花招、WS 同权、
+> 与「AI 生成即不可靠」无关的部分：**测试是可复核的**。`npm test` 是 25 个套件、700 项
+> 全离线的断言，其中 `admin-auth-test.mjs` 专门覆盖网关鉴权（7 种路径花招、WS 同权、
 > 改密后旧 cookie 失效）。数字与结论都能自己跑一遍验证，不必只信这段说明。
 
 ---
@@ -89,6 +89,9 @@ dsh plugin --profile desktop add dsh-sakurafrp -w
 - **本地新建隧道**：手上一条隧道都没有时，选个节点就能建——固定 TCP 类型、
   表单里的端口同时作为本机端口、远程端口交给官方分配，不用先有域名和解析；
   节点列表带实时负载（空闲/一般/拥挤/满载，颜色区分），满载的置灰不给选
+- **删除隧道**：在「② 隧道」里删除当前选中的那条，二次确认后调用官方
+  `POST /tunnel/delete`；删的是当前隧道时插件会同步停 frpc、清空 tunnelId、
+  把开关落回关闭——不会留下「开关还亮着，公网入口已经没了」的状态
 - **端口双向同步**（`autoAlign` / `adoptTunnelPort`）：改端口前先试绑，绑得上才改；
   改完把面板里那条隧道的 `local_port` 一起改过去。反过来，只是选了条隧道时，
   本机端口跟着隧道走——根治「隧道连上了但访问 502」
@@ -178,6 +181,9 @@ frpc 默认取 `~/.dsh/dsh-sakurafrp/frpc-standalone(.exe)`；旧版本放在
    新建表单里一行放完：名字、端口、节点（下拉框，后面标着空闲/一般/拥挤）、保存。
    名字可以留空（就叫 DSH），建完自动选中。
    （自动 HTTPS 固定用「自动」，不在界面上让选 —— 新建的都是 TCP 隧道，这一项对它不起作用。）
+   选中一条隧道后，右边还会出现「删除隧道」——删除**不可恢复**，会弹确认框，
+   并明确告诉你要删的是哪一条、公网入口会一起失效。只是换端口或节点的话，
+   改设置就行，不必删隧道。
 4. **③ 本机端口**（选了隧道后出现）：**新装是空的，必须自己填**（插件不会替你猜一个）。
    填完立刻检测这个端口能不能用；保存时会把 SakuraFrp 面板里这条隧道的端口一起改掉。
    选了已有隧道的话，这里会自动填成隧道里写的端口，不用手动对。
@@ -230,6 +236,8 @@ POST /natfrp/api/start     启用并启动
 POST /natfrp/api/stop      停止
 POST /natfrp/api/align     把隧道「本地端口」改成插件正在用的端口
 POST /natfrp/api/tunnel/create  新建一条 TCP 隧道 {name,node,port}，本地端口指向插件
+POST /natfrp/api/tunnel/delete  删除一条隧道 {id}；删的是当前隧道时会停 frpc 并关闭开关
+                                官方返回的 failed 表示「已删除但没踢下线」，不是删除失败
 POST /natfrp/api/config    更新配置 {enabled,tunnelId,gatePort,gatePassword,token,clearGatePassword}
                             gatePort 传 null / '' = 清空端口（网关随之停止）
 GET  /natfrp/api/frpc/check        本地 frpc 是否存在 / 版本是否合规（不下载）
@@ -352,7 +360,7 @@ DSH 的会话 cookie 名是 `dsh-auth-<base64url(sha256(host:port))>`，**名字
 也是拿一个临时 `DSH_HOME` 跑冷启动）。
 
 ```powershell
-npm test                 # 24 个套件、655 项，串行跑并汇总
+npm test                 # 25 个套件、700 项，串行跑并汇总
 npm test -- path         # 只跑名字含关键字的套件
 ```
 
@@ -368,9 +376,10 @@ npm test -- path         # 只跑名字含关键字的套件
 | 套件 | 项 | 覆盖 |
 |---|---|---|
 | `verify.mjs` | 31 | 模块级 + 网关全链路（API 客户端 / frpc 解析 / 密码门 / 围栏 / WS 透传） |
-| `order-test.mjs` | 61 | 四步解锁顺序、表单排布、按钮文案与出现条件 |
+| `order-test.mjs` | 68 | 四步解锁顺序、表单排布、按钮文案与出现条件 |
 | `paths-test.mjs` | 51 | frpc / DSH home 路径解析（含 `$DSH_HOME` 空白、`PROFILE_DIR` 反推） |
 | `tunnel-create-test.mjs` | 50 | 新建隧道（端口来源、`extra.auto_https`、官方告警回传） |
+| `tunnel-delete-test.mjs` | 27 | 删除隧道（`deleted` / `failed` 语义、当前隧道状态清理、失败不误伤） |
 | `progressive-test.mjs` | 59 | 渐进解锁派生状态与提示语 |
 | `feedback-test.mjs` | 37 | 操作反馈、错误码与文案 |
 | `installer-test.mjs` | 52 | frpc 资产挑选 / 下载 / 版本校验 / 版本号提取与比较 |
@@ -380,8 +389,8 @@ npm test -- path         # 只跑名字含关键字的套件
 | `external-test.mjs` | 24 | 外链策略（内置标签 / 退化 / 非绝对地址拒绝） |
 | `token-test.mjs` | 24 | 密钥写入、清除、掩码 |
 | `diag-test.mjs` | 22 | 诊断信息与状态徽标 |
-| `admin-auth-test.mjs` | 22 | 网关管理接口鉴权（8 种路径花招 / WS 同权 / 改密后旧 cookie 失效） |
-| `fixes-test.mjs` | 31 | 已修 bug 回归（跨盘路径 / 互踢误判 / 密码迁移 / 清空不复活 / API 自愈 / 登录回跳） |
+| `admin-auth-test.mjs` | 24 | 网关管理接口鉴权（7 种路径花招 / WS 同权 / 改密后旧 cookie 失效 / 未登录删除隧道被拒） |
+| `fixes-test.mjs` | 40 | 已修 bug 回归（跨盘路径 / 互踢误判 / 密码迁移 / 清空不复活 / API 自愈 / 登录回跳 / 时间戳本地时区 / 深色输入框） |
 | `defaults-test.mjs` | 19 | 配置默认值 |
 | `update-check-test.mjs` | 15 | 手动检查更新（结论 / 60s 节流 / 连点拦截 / hooks 规则） |
 | `scroll-test.mjs` | 14 | 主面板滚动容器链 |
@@ -390,6 +399,7 @@ npm test -- path         # 只跑名字含关键字的套件
 | `density-test.mjs` | 11 | 面板信息密度与读屏高度 |
 | `fresh-install-test.mjs` | 10 | 全新安装的冷启动形态 |
 | `credential-token-test.mjs` | 5 | `tokenRef` → DSH credentials 读写 |
+| `gate-redirect-test.mjs` | 12 | 网关 token 补发与重定向循环（补一次即停 / 存不住 cookie 时给说明页 / 自愈仅一次） |
 
 界面走查用 `preview-render.mjs`：它用极简 React 桩把真实的 `Panel` 渲染成静态 HTML，
 可导出 `ready` / `fresh` / `create` / `noport` 四种形态，再用无头浏览器截图核对。

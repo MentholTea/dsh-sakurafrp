@@ -227,6 +227,11 @@ function renderNode(node) {
   if (props.type) attrs.push(`type="${esc(props.type)}"`)
   if (props.value !== undefined && props.value !== '') attrs.push(`value="${esc(props.value)}"`)
   if (props.href) attrs.push(`href="#"`)
+  // data-* 原样保留：面板靠 data-natfrp-panel 给 placeholder 定作用域，
+  // 预览里丢了它，<style> 里的规则就永远不生效。
+  for (const [k, v] of Object.entries(props)) {
+    if (k.startsWith('data-')) attrs.push(`${k}="${esc(v)}"`)
+  }
   attrs.push(`style="${css(props.style)}"`)
   const inner = children.map(renderNode).join('')
   if (type === 'input') return `<input ${attrs.join(' ')}>`
