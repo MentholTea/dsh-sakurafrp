@@ -4,6 +4,7 @@
 //   2) 「login to server failed」被误计入互踢，密钥填错却提示"疑似互踢"
 //   3) 旧版 state.json 里的明文 gatePassword 迁移后仍留在原处
 //   4) /port/check 接受 80 这类特权端口，与保存时的校验口径不一致
+//   5) 日志时间戳曾用 toISOString() 打 UTC，与用户本机时间差 8 小时
 //
 // 全部离线：只写临时 DSH_HOME。
 
@@ -46,6 +47,22 @@ const rec = (name, cond, extra = '') => {
   const kicked = createFrpcManager({ frpcPath: 'x', getToken: () => 't' })
   for (let i = 0; i < 6; i++) kicked._feed('[E] 网络波动导致数据连接断开, 正在重试: EOF')
   rec('真实断线风暴仍判定互踢', kicked.snapshot().kickSuspect === true)
+
+  // 日志时间戳必须走本机本地时间。曾误用 toISOString() → 打的是 UTC（带 Z），
+  // 比北京时间慢 8 小时，用户对照 frpc 原始输出时对不上号。
+  const stamper = createFrpcManager({ frpcPath: 'x', getToken: () => 't' })
+  stamper._feed('[I] 隧道启动成功')
+  const logLine = stamper.logs()[0]
+  const dm = logLine.match(/^\[(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\] /)
+  rec('日志时间戳格式为 YYYY-MM-DD HH:mm:ss', Boolean(dm), logLine)
+  rec('日志时间戳不再带 UTC 的 Z 后缀', !/\dZ\]/.test(logLine), logLine)
+  if (dm) {
+    // 按「本地时间」反向解析：若时间戳实为 UTC，这里会差出整整一个时区（8h）而被抓到
+    const parsed = new Date(+dm[1], +dm[2] - 1, +dm[3], +dm[4], +dm[5], +dm[6])
+    rec('日志时间戳等于本机当前时刻（±5s）',
+      Math.abs(parsed.getTime() - Date.now()) < 5000,
+      `parsed=${parsed.toISOString()} now=${new Date().toISOString()}`)
+  }
 }
 
 // ---------- 3) 旧 state.json 明文密码迁移 ----------
